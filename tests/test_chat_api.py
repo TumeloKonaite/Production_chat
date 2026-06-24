@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.api.chat import get_chat_service
+from app.api.dependencies import get_chat_service
 from app.main import app
 from app.services.llm_service import LLMServiceError
 
