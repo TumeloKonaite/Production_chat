@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
         _: Request,
         __: LLMConfigurationError,
     ) -> JSONResponse:
+        # Configuration failures are kept generic so deployment details are not exposed.
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Chat service is not configured correctly."},
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(LLMServiceError)
     async def handle_llm_error(_: Request, __: LLMServiceError) -> JSONResponse:
+        # Upstream provider failures are normalized to one safe client-facing message.
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": "Unable to generate assistant response. Please try again."},
