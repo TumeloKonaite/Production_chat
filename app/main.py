@@ -2,8 +2,14 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
-from app.services.chat_service import ChatServiceError, InvalidChatMessageError
-from app.services.llm_service import LLMConfigurationError, LLMServiceError
+from app.services.chat import (
+    ChatPersistenceError,
+    ChatServiceError,
+    ConversationNotFoundError,
+    InvalidChatMessageError,
+    InvalidConversationIdError,
+)
+from app.services.llm import LLMConfigurationError, LLMServiceError
 
 
 def create_app() -> FastAPI:
@@ -24,6 +30,26 @@ def create_app() -> FastAPI:
             content={"detail": str(exc)},
         )
 
+    @app.exception_handler(InvalidConversationIdError)
+    async def handle_invalid_conversation_id(
+        _: Request,
+        exc: InvalidConversationIdError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(ConversationNotFoundError)
+    async def handle_missing_conversation(
+        _: Request,
+        exc: ConversationNotFoundError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc)},
+        )
+
     @app.exception_handler(LLMConfigurationError)
     async def handle_configuration_error(
         _: Request,
@@ -41,6 +67,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": "Unable to generate assistant response. Please try again."},
+        )
+
+    @app.exception_handler(ChatPersistenceError)
+    async def handle_persistence_error(
+        _: Request,
+        __: ChatPersistenceError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Unable to save chat conversation. Please try again."},
         )
 
     @app.exception_handler(ChatServiceError)
