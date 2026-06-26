@@ -13,7 +13,7 @@ from app.api.dependencies.chat_dependencies import get_llm_service
 from app.api.dependencies.common_dependencies import get_db_session
 from app.main import app
 from app.repositories.db.base import Base
-from app.repositories.db.models import Conversation, Message
+from app.repositories.models import Conversation, Message
 from app.services.llm import LLMChatMessage, LLMGeneratedResponse, LLMServiceError, TokenUsage
 
 
