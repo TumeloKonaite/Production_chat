@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.repositories.db.models import Conversation, Message, utcnow
+from app.repositories.models import Conversation, Message, utcnow
 
 
 class ConversationRepositoryError(Exception):
