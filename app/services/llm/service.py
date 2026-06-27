@@ -33,7 +33,7 @@ class LLMGeneratedResponse:
     message: str
     model: str
     prompt_version: str
-    latency_ms: int
+    latency_ms: int | None
     token_usage: TokenUsage
 
 
@@ -52,17 +52,22 @@ class LLMService:
     def prompt_version(self) -> str:
         return self._settings.prompt_version
 
+    def load_system_prompt(self) -> str:
+        return self._load_system_prompt()
+
     async def generate_response(
         self,
         messages: Sequence[LLMChatMessage],
+        *,
+        system_prompt: str | None = None,
     ) -> LLMGeneratedResponse:
         api_key = self._get_api_key()
-        system_prompt = self._load_system_prompt()
+        prompt_text = system_prompt or self._load_system_prompt()
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        payload = self._build_payload(messages=messages, system_prompt=system_prompt)
+        payload = self._build_payload(messages=messages, system_prompt=prompt_text)
         started_at = perf_counter()
         response_payload = await self._request_completion(headers=headers, payload=payload)
         latency_ms = int((perf_counter() - started_at) * 1000)

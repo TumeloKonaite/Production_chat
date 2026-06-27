@@ -19,6 +19,7 @@ class KnowledgeChunk(Base):
         default=lambda: str(uuid.uuid4()),
     )
     source: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False, default="markdown")
     section: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_metadata: Mapped[dict[str, object]] = mapped_column(

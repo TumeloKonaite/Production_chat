@@ -12,6 +12,7 @@ from app.knowledge.ingestion.loader import SourceDocument
 @dataclass(frozen=True, slots=True)
 class ChunkedDocument:
     source: str
+    source_type: str
     section: str
     content: str
     metadata: dict[str, object]
@@ -40,8 +41,7 @@ def chunk_markdown_document(
     )
 
     section_documents = header_splitter.split_text(document.text)
-    # Plain text without headings still needs to be chunked, so fall back to a
-    # single synthetic document when the header splitter finds nothing.
+    
     if not section_documents and document.text.strip():
         section_documents = [Document(page_content=document.text, metadata={})]
 
@@ -57,8 +57,6 @@ def chunk_markdown_document(
         if not content:
             continue
 
-        # Track chunk order both globally and within each section so downstream
-        # retrieval can preserve document structure if needed.
         section = _resolve_section_name(split_document.metadata)
         section_chunk_index = section_indexes.get(section, 0)
         section_indexes[section] = section_chunk_index + 1
@@ -74,6 +72,7 @@ def chunk_markdown_document(
         chunked_documents.append(
             ChunkedDocument(
                 source=document.source,
+                source_type="markdown",
                 section=section,
                 content=content,
                 metadata=metadata,
@@ -86,8 +85,6 @@ def chunk_markdown_document(
 
 
 def _resolve_section_name(metadata: dict[str, str]) -> str:
-    # Prefer the deepest available heading because LangChain carries parent
-    # headings forward in metadata for nested markdown sections.
     for key in ("h3", "h2", "h1"):
         value = metadata.get(key)
         if value:
