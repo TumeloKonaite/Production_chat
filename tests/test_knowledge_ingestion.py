@@ -44,6 +44,14 @@ def write_source_file(base_dir: Path, name: str, content: str) -> None:
     (base_dir / name).write_text(content, encoding="utf-8")
 
 
+class FakeRetrievalService:
+    def __init__(self) -> None:
+        self.replaced_chunk_ids: list[str] = []
+
+    def replace_all_chunks(self, chunks: list[KnowledgeChunk]) -> None:
+        self.replaced_chunk_ids = [chunk.id for chunk in chunks]
+
+
 def test_loader_reads_markdown_documents(tmp_path) -> None:
     source_dir = tmp_path / "source"
     write_source_file(source_dir, "profile.md", "# Profile\n\nTumelo builds AI products.\n")
@@ -85,6 +93,7 @@ def test_chunker_splits_by_heading_and_keeps_metadata() -> None:
 
     assert len(chunks) >= 2
     assert chunks[0].section == "Projects"
+    assert chunks[0].source_type == "markdown"
     assert chunks[0].metadata["source"] == "projects.md"
     assert chunks[0].metadata["content_type"] == "projects"
     assert chunks[1].content.startswith("## Portfolio Chatbot")
@@ -128,9 +137,14 @@ def test_ingest_knowledge_loads_and_persists_all_documents(tmp_path) -> None:
     write_source_file(source_dir, "profile.md", "# Profile\n\nTumelo builds AI products.\n")
     write_source_file(source_dir, "contact.md", "# Contact\n\nReach out for AI and backend work.\n")
     session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
 
     with session_factory() as session:
-        documents, results = ingest_knowledge(session, source_dir=source_dir)
+        documents, results = ingest_knowledge(
+            session,
+            retrieval_service,
+            source_dir=source_dir,
+        )
         repository = KnowledgeRepository(session)
         stored_chunks = repository.list_all()
 
@@ -138,3 +152,5 @@ def test_ingest_knowledge_loads_and_persists_all_documents(tmp_path) -> None:
     assert [result.source for result in results] == ["contact.md", "profile.md"]
     assert len(stored_chunks) == 2
     assert all(isinstance(chunk, KnowledgeChunk) for chunk in stored_chunks)
+    assert all(chunk.source_type == "markdown" for chunk in stored_chunks)
+    assert len(retrieval_service.replaced_chunk_ids) == 2

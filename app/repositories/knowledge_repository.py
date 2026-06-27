@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.knowledge.ingestion.chunker import ChunkedDocument
-from app.repositories.models import KnowledgeChunk
+from app.repositories.models import KnowledgeChunk, RetrievalLog
+
+if TYPE_CHECKING:
+    from app.knowledge.ingestion.chunker import ChunkedDocument
 
 
 class KnowledgeRepositoryError(Exception):
@@ -30,6 +33,7 @@ class KnowledgeRepository:
         records = [
             KnowledgeChunk(
                 source=chunk.source,
+                source_type=chunk.source_type,
                 section=chunk.section,
                 content=chunk.content,
                 chunk_metadata=chunk.metadata,
@@ -65,25 +69,38 @@ class KnowledgeRepository:
         )
         return self._run_scalar_query(statement)
 
-    def search(self, query: str, *, limit: int = 20) -> Sequence[KnowledgeChunk]:
-        search_text = query.strip()
-        if not search_text:
-            return []
-
-        pattern = f"%{search_text}%"
-        statement = (
-            select(KnowledgeChunk)
-            .where(
-                or_(
-                    KnowledgeChunk.content.ilike(pattern),
-                    KnowledgeChunk.section.ilike(pattern),
-                    KnowledgeChunk.source.ilike(pattern),
-                )
-            )
-            .order_by(KnowledgeChunk.updated_at.desc(), KnowledgeChunk.created_at.desc())
-            .limit(limit)
+    def log_retrieval(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str,
+        query: str,
+        top_k: int,
+        retrieved_chunk_ids: Sequence[str],
+        retrieved_sources: Sequence[str],
+        similarity_scores: Sequence[float],
+        used_fallback: bool,
+    ) -> RetrievalLog:
+        log_entry = RetrievalLog(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            query=query,
+            top_k=top_k,
+            retrieved_chunk_ids=list(retrieved_chunk_ids),
+            retrieved_sources=list(retrieved_sources),
+            similarity_scores=[float(score) for score in similarity_scores],
+            used_fallback=used_fallback,
         )
-        return self._run_scalar_query(statement)
+
+        try:
+            self._session.add(log_entry)
+            self._session.commit()
+            self._session.refresh(log_entry)
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise KnowledgeRepositoryError() from exc
+
+        return log_entry
 
     def _run_scalar_query(self, statement) -> Sequence[KnowledgeChunk]:
         try:

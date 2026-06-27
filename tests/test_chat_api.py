@@ -9,12 +9,13 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.dependencies.chat_dependencies import get_llm_service
+from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service
 from app.api.dependencies.common_dependencies import get_db_session
 from app.main import app
 from app.repositories.db.base import Base
-from app.repositories.models import Conversation, Message
+from app.repositories.models import Conversation, Message, RetrievalLog
 from app.services.llm import LLMChatMessage, LLMGeneratedResponse, LLMServiceError, TokenUsage
+from app.services.retrieval import RetrievedChunk
 
 
 @pytest.fixture(autouse=True)
@@ -36,12 +37,19 @@ class FakeLLMService:
         self.model = "gpt-4.1-mini"
         self.prompt_version = "v1"
         self.calls: list[list[LLMChatMessage]] = []
+        self.system_prompts: list[str] = []
+
+    def load_system_prompt(self) -> str:
+        return "Base system prompt."
 
     async def generate_response(
         self,
         messages: list[LLMChatMessage],
+        *,
+        system_prompt: str | None = None,
     ) -> LLMGeneratedResponse:
         self.calls.append(list(messages))
+        self.system_prompts.append(system_prompt or "")
         if self.fail:
             raise LLMServiceError("sk-test-should-not-leak")
 
@@ -58,7 +66,45 @@ class FakeLLMService:
         )
 
 
-def build_test_client(tmp_path, fake_llm: FakeLLMService) -> tuple[TestClient, sessionmaker[Session]]:
+class FakeRetrievalService:
+    def __init__(self, retrieved_chunks: list[RetrievedChunk] | None = None) -> None:
+        self.retrieved_chunks = (
+            [build_retrieved_chunk()] if retrieved_chunks is None else list(retrieved_chunks)
+        )
+        self.calls: list[tuple[str, int | None]] = []
+
+    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+        self.calls.append((query, top_k))
+        return list(self.retrieved_chunks)
+
+
+def build_retrieved_chunk(
+    *,
+    content: str = "Tumelo built a FastAPI chatbot backed by a curated knowledge base.",
+    source: str = "projects.md",
+    section: str = "Portfolio Chatbot",
+    similarity: float = 0.91,
+) -> RetrievedChunk:
+    return RetrievedChunk(
+        id="chunk-1",
+        source=source,
+        section=section,
+        content=content,
+        similarity=similarity,
+        metadata={
+            "chunk_id": "chunk-1",
+            "source": source,
+            "section": section,
+            "source_type": "markdown",
+        },
+    )
+
+
+def build_test_client(
+    tmp_path,
+    fake_llm: FakeLLMService,
+    fake_retrieval: FakeRetrievalService | None = None,
+) -> tuple[TestClient, sessionmaker[Session], FakeRetrievalService]:
     database_path = tmp_path / "test_chatbot.db"
     engine = create_engine(
         f"sqlite:///{database_path}",
@@ -81,14 +127,22 @@ def build_test_client(tmp_path, fake_llm: FakeLLMService) -> tuple[TestClient, s
         finally:
             session.close()
 
+    retrieval_service = fake_retrieval or FakeRetrievalService()
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_llm_service] = lambda: fake_llm
-    return TestClient(app), session_factory
+    app.dependency_overrides[get_retrieval_service] = lambda: retrieval_service
+    return TestClient(app), session_factory, retrieval_service
 
 
 def fetch_messages(session_factory: sessionmaker[Session]) -> list[Message]:
     with session_factory() as session:
         statement = select(Message).order_by(Message.created_at.asc(), Message.id.asc())
+        return list(session.scalars(statement))
+
+
+def fetch_retrieval_logs(session_factory: sessionmaker[Session]) -> list[RetrievalLog]:
+    with session_factory() as session:
+        statement = select(RetrievalLog).order_by(RetrievalLog.created_at.asc(), RetrievalLog.id.asc())
         return list(session.scalars(statement))
 
 
@@ -102,7 +156,7 @@ def test_health_returns_ok() -> None:
 
 def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Tumelo has worked on AI systems.")
-    client, session_factory = build_test_client(tmp_path, fake_llm)
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post("/chat", json={"message": "Tell me about Tumelo's AI projects"})
 
@@ -132,7 +186,7 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
 
 def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Production readiness is strongest in the RAG stack.")
-    client, session_factory = build_test_client(tmp_path, fake_llm)
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post(
         "/chat",
@@ -158,7 +212,7 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
 
 def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, session_factory = build_test_client(tmp_path, fake_llm)
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
     first_response = client.post("/chat", json={"message": "Tell me about Tumelo's AI projects"})
     conversation_id = first_response.json()["conversation_id"]
@@ -191,7 +245,7 @@ def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_
 
 def test_chat_rejects_empty_message(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, _ = build_test_client(tmp_path, fake_llm)
+    client, _, _ = build_test_client(tmp_path, fake_llm)
     response = client.post("/chat", json={"message": ""})
 
     assert response.status_code == 422
@@ -199,7 +253,7 @@ def test_chat_rejects_empty_message(tmp_path) -> None:
 
 def test_chat_rejects_whitespace_only_message(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, _ = build_test_client(tmp_path, fake_llm)
+    client, _, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post("/chat", json={"message": "   "})
 
@@ -211,7 +265,7 @@ def test_chat_rejects_whitespace_only_message(tmp_path) -> None:
 
 def test_chat_rejects_invalid_conversation_id(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, _ = build_test_client(tmp_path, fake_llm)
+    client, _, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post(
         "/chat",
@@ -226,7 +280,7 @@ def test_chat_rejects_invalid_conversation_id(tmp_path) -> None:
 
 def test_chat_returns_not_found_for_missing_conversation(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, _ = build_test_client(tmp_path, fake_llm)
+    client, _, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post(
         "/chat",
@@ -241,7 +295,7 @@ def test_chat_returns_not_found_for_missing_conversation(tmp_path) -> None:
 
 def test_llm_failures_leave_user_message_persisted_without_assistant_message(tmp_path) -> None:
     fake_llm = FakeLLMService(fail=True)
-    client, session_factory = build_test_client(tmp_path, fake_llm)
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post("/chat", json={"message": "Hello"})
 
@@ -260,7 +314,7 @@ def test_llm_failures_leave_user_message_persisted_without_assistant_message(tmp
 
 def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
     fake_llm = FakeLLMService()
-    client, session_factory = build_test_client(tmp_path, fake_llm)
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
     conversation_id = str(uuid.uuid4())
     base_time = datetime.now(timezone.utc) - timedelta(hours=2)
 
@@ -308,3 +362,61 @@ def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
         "message-12",
         "new-follow-up",
     ]
+
+
+def test_chat_injects_retrieved_context_into_system_prompt(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tumelo built a retrieval-grounded chatbot.")
+    fake_retrieval = FakeRetrievalService(
+        [build_retrieved_chunk(content="Tumelo built a retrieval-grounded FastAPI chatbot.")]
+    )
+    client, _, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot project"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(fake_llm.system_prompts) == 1
+    assert "Approved Tumelo knowledge base context" in fake_llm.system_prompts[0]
+    assert "Tumelo built a retrieval-grounded FastAPI chatbot." in fake_llm.system_prompts[0]
+    assert "Do not invent experience, projects, employers, dates, tools, certifications, or achievements." in fake_llm.system_prompts[0]
+
+
+def test_chat_personal_query_without_context_returns_safe_fallback(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="This should not be used.")
+    fake_retrieval = FakeRetrievalService([])
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
+
+    response = client.post("/chat", json={"message": "What companies has Tumelo worked for?"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == (
+        "I do not have enough approved information about that in Tumelo's knowledge base yet."
+    )
+    assert fake_llm.calls == []
+
+    logs = fetch_retrieval_logs(session_factory)
+    assert len(logs) == 1
+    assert logs[0].retrieved_chunk_ids == []
+    assert logs[0].used_fallback is True
+
+
+def test_chat_general_question_without_context_still_uses_llm(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="RAG combines retrieval with generation.")
+    fake_retrieval = FakeRetrievalService([])
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
+
+    response = client.post("/chat", json={"message": "What is retrieval augmented generation?"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "RAG combines retrieval with generation."
+    assert len(fake_llm.calls) == 1
+    assert "No relevant approved Tumelo context was retrieved for this turn" in fake_llm.system_prompts[0]
+
+    logs = fetch_retrieval_logs(session_factory)
+    assert len(logs) == 1
+    assert logs[0].used_fallback is False
