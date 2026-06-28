@@ -3,11 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 import uuid
 
+from app.config import Settings
+from app.infrastructure.prompts import PromptLoader
 from app.repositories import (
     ConversationRepository,
     ConversationRepositoryError,
     KnowledgeRepository,
     KnowledgeRepositoryError,
+)
+from app.services.chat.prompting import (
+    build_chat_system_prompt,
+    build_direct_fallback_text,
+    should_use_direct_fallback,
 )
 from app.services.chat.errors import (
     ChatPersistenceError,
@@ -18,51 +25,6 @@ from app.services.chat.errors import (
 )
 from app.services.llm.service import LLMChatMessage, LLMGeneratedResponse, TokenUsage
 from app.services.retrieval import RetrievedChunk, RetrievalService
-
-PERSONAL_QUERY_MARKERS = {
-    "tumelo",
-    "you",
-    "your",
-    "yours",
-    "experience",
-    "background",
-    "education",
-    "contact",
-    "email",
-    "linkedin",
-    "github",
-    "portfolio",
-    "project",
-    "projects",
-    "skill",
-    "skills",
-    "worked",
-    "career",
-    "resume",
-    "cv",
-    "employer",
-    "employment",
-    "degree",
-    "certification",
-    "location",
-}
-GENERAL_TECH_MARKERS = {
-    "api",
-    "backend",
-    "chatbot",
-    "database",
-    "docker",
-    "embedding",
-    "fastapi",
-    "llm",
-    "postgres",
-    "python",
-    "rag",
-    "retrieval",
-    "sql",
-    "sqlalchemy",
-    "vector",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,29 +41,41 @@ class ChatService:
     def __init__(
         self,
         llm_service,
+        prompt_loader: PromptLoader,
         repository: ConversationRepository,
         knowledge_repository: KnowledgeRepository,
         retrieval_service: RetrievalService,
         history_limit: int,
         retrieval_top_k: int,
+        settings: Settings,
     ) -> None:
         self.llm_service = llm_service
+        self.prompt_loader = prompt_loader
         self.repository = repository
         self.knowledge_repository = knowledge_repository
         self.retrieval_service = retrieval_service
         self.history_limit = history_limit
         self.retrieval_top_k = retrieval_top_k
+        self.settings = settings
 
     async def generate_reply(
         self,
         message: str,
         conversation_id: str | None = None,
+        prompt_version: str | None = None,
     ) -> ChatReply:
         normalized_message = message.strip()
         if not normalized_message:
             raise InvalidChatMessageError("Chat message cannot be empty.")
 
-        conversation = self._get_or_create_conversation(conversation_id)
+        selected_prompt_version = prompt_version or self.settings.default_prompt_version
+        base_prompt = self.prompt_loader.load(selected_prompt_version)
+
+        conversation = self._get_or_create_conversation(
+            conversation_id,
+            prompt_version=selected_prompt_version,
+        )
+        conversation.prompt_version = selected_prompt_version
 
         try:
             # Persist the user turn before calling the LLM so failed generations still leave a trace.
@@ -118,7 +92,7 @@ class ChatService:
             raise ChatPersistenceError() from exc
 
         retrieved_chunks = self._retrieve_chunks(normalized_message)
-        use_direct_fallback = not retrieved_chunks and self._should_use_direct_fallback(normalized_message)
+        use_direct_fallback = should_use_direct_fallback(normalized_message, retrieved_chunks)
         self._log_retrieval(
             conversation_id=conversation.id,
             message_id=user_message.id,
@@ -130,20 +104,22 @@ class ChatService:
         if use_direct_fallback:
             llm_response = self._build_direct_response(
                 normalized_message,
-                personal_query=self._is_personal_query(normalized_message),
+                prompt_version=selected_prompt_version,
             )
         else:
             llm_messages = [
                 LLMChatMessage(role=stored_message.role, content=stored_message.content)
                 for stored_message in recent_messages
             ]
-            system_prompt = self._build_system_prompt(
+            system_prompt = build_chat_system_prompt(
+                base_prompt=base_prompt,
                 message=normalized_message,
                 retrieved_chunks=retrieved_chunks,
             )
             llm_response = await self.llm_service.generate_response(
                 llm_messages,
                 system_prompt=system_prompt,
+                prompt_version=selected_prompt_version,
             )
 
         # Only persist the assistant turn after the final response succeeds.
@@ -158,9 +134,14 @@ class ChatService:
             token_usage=llm_response.token_usage,
         )
 
-    def _get_or_create_conversation(self, conversation_id: str | None):
+    def _get_or_create_conversation(
+        self,
+        conversation_id: str | None,
+        *,
+        prompt_version: str,
+    ):
         if conversation_id is None:
-            return self._create_conversation()
+            return self._create_conversation(prompt_version=prompt_version)
 
         self._validate_conversation_id(conversation_id)
         try:
@@ -173,11 +154,11 @@ class ChatService:
 
         return conversation
 
-    def _create_conversation(self):
+    def _create_conversation(self, *, prompt_version: str):
         try:
             return self.repository.create_conversation(
                 model=self.llm_service.model,
-                prompt_version=self.llm_service.prompt_version,
+                prompt_version=prompt_version,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
@@ -211,88 +192,16 @@ class ChatService:
         except KnowledgeRepositoryError as exc:
             raise ChatServiceError() from exc
 
-    def _build_system_prompt(
-        self,
-        *,
-        message: str,
-        retrieved_chunks: list[RetrievedChunk],
-    ) -> str:
-        base_prompt = self.llm_service.load_system_prompt()
-        context_block = self._format_retrieved_context(retrieved_chunks)
-        guidance = [
-            "Use the retrieved context to answer the visitor's question when it is relevant to Tumelo.",
-            "Do not invent experience, projects, employers, dates, tools, certifications, or achievements.",
-            "If the approved context does not contain enough Tumelo-specific information, say that you do not have that information available.",
-            "If the user is asking a general technical question, you may answer generally, but do not present general knowledge as Tumelo's personal experience.",
-        ]
-        if not retrieved_chunks:
-            guidance.append(
-                "No relevant approved Tumelo context was retrieved for this turn, so avoid personal claims unless they are already established in the conversation."
-            )
-
-        return "\n\n".join(
-            [
-                base_prompt,
-                "Approved Tumelo knowledge base context:\n" + context_block,
-                "Additional rules:\n" + "\n".join(f"- {rule}" for rule in guidance),
-                f"Current user question:\n{message}",
-            ]
-        )
-
-    def _format_retrieved_context(self, retrieved_chunks: list[RetrievedChunk]) -> str:
-        if not retrieved_chunks:
-            return "No approved context retrieved."
-
-        formatted_chunks = []
-        for item in retrieved_chunks:
-            formatted_chunks.append(
-                "\n".join(
-                    [
-                        f"Source: {item.source}",
-                        f"Section: {item.section}",
-                        f"Similarity: {item.similarity:.3f}",
-                        item.content,
-                    ]
-                )
-            )
-        return "\n\n---\n\n".join(formatted_chunks)
-
-    def _should_use_direct_fallback(self, message: str) -> bool:
-        if self._is_personal_query(message):
-            return True
-        if self._is_general_technical_query(message):
-            return False
-        return True
-
-    def _is_personal_query(self, message: str) -> bool:
-        normalized_message = message.casefold()
-        return any(marker in normalized_message for marker in PERSONAL_QUERY_MARKERS)
-
-    def _is_general_technical_query(self, message: str) -> bool:
-        normalized_message = message.casefold()
-        if self._is_personal_query(message):
-            return False
-        return any(marker in normalized_message for marker in GENERAL_TECH_MARKERS)
-
     def _build_direct_response(
         self,
         message: str,
         *,
-        personal_query: bool,
+        prompt_version: str,
     ) -> LLMGeneratedResponse:
-        if personal_query:
-            response_text = (
-                "I do not have enough approved information about that in Tumelo's knowledge base yet."
-            )
-        else:
-            response_text = (
-                "Could you clarify whether you're asking about Tumelo's background or a general technical topic?"
-            )
-
         return LLMGeneratedResponse(
-            message=response_text,
+            message=build_direct_fallback_text(message),
             model=self.llm_service.model,
-            prompt_version=self.llm_service.prompt_version,
+            prompt_version=prompt_version,
             latency_ms=None,
             token_usage=TokenUsage(),
         )

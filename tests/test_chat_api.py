@@ -10,7 +10,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service
-from app.api.dependencies.common_dependencies import get_db_session
+from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
+from app.config import Settings
 from app.main import app
 from app.repositories.db.base import Base
 from app.repositories.models import Conversation, Message, RetrievalLog
@@ -35,28 +36,28 @@ class FakeLLMService:
         self.reply = reply
         self.fail = fail
         self.model = "gpt-4.1-mini"
-        self.prompt_version = "v1"
         self.calls: list[list[LLMChatMessage]] = []
         self.system_prompts: list[str] = []
-
-    def load_system_prompt(self) -> str:
-        return "Base system prompt."
+        self.prompt_versions: list[str] = []
 
     async def generate_response(
         self,
         messages: list[LLMChatMessage],
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        prompt_version: str,
+        temperature: float | None = None,
     ) -> LLMGeneratedResponse:
         self.calls.append(list(messages))
-        self.system_prompts.append(system_prompt or "")
+        self.system_prompts.append(system_prompt)
+        self.prompt_versions.append(prompt_version)
         if self.fail:
             raise LLMServiceError("sk-test-should-not-leak")
 
         return LLMGeneratedResponse(
             message=self.reply,
             model=self.model,
-            prompt_version=self.prompt_version,
+            prompt_version=prompt_version,
             latency_ms=842,
             token_usage=TokenUsage(
                 input_tokens=1200,
@@ -100,10 +101,28 @@ def build_retrieved_chunk(
     )
 
 
+def build_test_settings(*, default_prompt_version: str = "v1_professional") -> Settings:
+    return Settings(
+        database_url="sqlite:///unused-for-tests.db",
+        openai_api_key="test-key",
+        openai_model="gpt-4.1-mini",
+        knowledge_embedding_model="all-MiniLM-L6-v2",
+        knowledge_collection_name="personal_knowledge_base",
+        default_prompt_version=default_prompt_version,
+        conversation_history_limit=10,
+        retrieval_top_k=5,
+        retrieval_min_similarity=0.55,
+        mlflow_tracking_uri=None,
+        mlflow_experiment_name="portfolio-chatbot-prompt-experiments",
+    )
+
+
 def build_test_client(
     tmp_path,
     fake_llm: FakeLLMService,
     fake_retrieval: FakeRetrievalService | None = None,
+    *,
+    default_prompt_version: str = "v1_professional",
 ) -> tuple[TestClient, sessionmaker[Session], FakeRetrievalService]:
     database_path = tmp_path / "test_chatbot.db"
     engine = create_engine(
@@ -128,7 +147,9 @@ def build_test_client(
             session.close()
 
     retrieval_service = fake_retrieval or FakeRetrievalService()
+    settings = build_test_settings(default_prompt_version=default_prompt_version)
     app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_llm_service] = lambda: fake_llm
     app.dependency_overrides[get_retrieval_service] = lambda: retrieval_service
     return TestClient(app), session_factory, retrieval_service
@@ -168,7 +189,7 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
         "conversation_id": body["conversation_id"],
         "message": "Tumelo has worked on AI systems.",
         "model": "gpt-4.1-mini",
-        "prompt_version": "v1",
+        "prompt_version": "v1_professional",
         "latency_ms": 842,
         "token_usage": {
             "input_tokens": 1200,
@@ -181,7 +202,7 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
         conversation = session.get(Conversation, body["conversation_id"])
         assert conversation is not None
         assert conversation.model == "gpt-4.1-mini"
-        assert conversation.prompt_version == "v1"
+        assert conversation.prompt_version == "v1_professional"
 
 
 def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
@@ -203,7 +224,7 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert messages[0].model is None
     assert messages[1].content == "Production readiness is strongest in the RAG stack."
     assert messages[1].model == "gpt-4.1-mini"
-    assert messages[1].prompt_version == "v1"
+    assert messages[1].prompt_version == "v1_professional"
     assert messages[1].latency_ms == 842
     assert messages[1].input_tokens == 1200
     assert messages[1].output_tokens == 180
@@ -236,6 +257,7 @@ def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_
     assert [(message.role, message.content) for message in fake_llm.calls[0]] == [
         ("user", "Tell me about Tumelo's AI projects"),
     ]
+    assert fake_llm.prompt_versions == ["v1_professional", "v1_professional"]
     assert [(message.role, message.content) for message in fake_llm.calls[1]] == [
         ("user", "Tell me about Tumelo's AI projects"),
         ("assistant", "Mocked assistant response."),
@@ -322,7 +344,7 @@ def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
         conversation = Conversation(
             id=conversation_id,
             model="gpt-4.1-mini",
-            prompt_version="v1",
+            prompt_version="v1_professional",
             created_at=base_time,
             updated_at=base_time,
         )
@@ -379,6 +401,7 @@ def test_chat_injects_retrieved_context_into_system_prompt(tmp_path) -> None:
     assert len(fake_llm.system_prompts) == 1
     assert "Approved Tumelo knowledge base context" in fake_llm.system_prompts[0]
     assert "Tumelo built a retrieval-grounded FastAPI chatbot." in fake_llm.system_prompts[0]
+    assert "Answer as a professional assistant representing Tumelo." in fake_llm.system_prompts[0]
     assert "Do not invent experience, projects, employers, dates, tools, certifications, or achievements." in fake_llm.system_prompts[0]
 
 
@@ -420,3 +443,49 @@ def test_chat_general_question_without_context_still_uses_llm(tmp_path) -> None:
     logs = fetch_retrieval_logs(session_factory)
     assert len(logs) == 1
     assert logs[0].used_fallback is False
+
+
+def test_chat_uses_requested_prompt_version(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tumelo builds practical AI systems.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "Tell me about Tumelo's work.",
+            "prompt_version": "v2_warm_conversational",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["prompt_version"] == "v2_warm_conversational"
+    assert fake_llm.prompt_versions == ["v2_warm_conversational"]
+    assert "Tone:\n- warm" in fake_llm.system_prompts[0]
+
+    messages = fetch_messages(session_factory)
+    assert messages[1].prompt_version == "v2_warm_conversational"
+
+    with session_factory() as session:
+        conversation = session.get(Conversation, response.json()["conversation_id"])
+        assert conversation is not None
+        assert conversation.prompt_version == "v2_warm_conversational"
+
+
+def test_chat_rejects_unknown_prompt_version(tmp_path) -> None:
+    fake_llm = FakeLLMService()
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        "/chat",
+        json={"message": "Tell me about Tumelo.", "prompt_version": "v999_unknown"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Unknown prompt version: v999_unknown. Available versions: v1_professional, v2_warm_conversational"
+    }
+    assert fetch_messages(session_factory) == []

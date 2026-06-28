@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
+from app.infrastructure.prompts import UnknownPromptVersionError
 from app.services.chat import (
     ChatPersistenceError,
     ChatServiceError,
@@ -34,6 +35,16 @@ def create_app() -> FastAPI:
     async def handle_invalid_conversation_id(
         _: Request,
         exc: InvalidConversationIdError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(UnknownPromptVersionError)
+    async def handle_unknown_prompt_version(
+        _: Request,
+        exc: UnknownPromptVersionError,
     ) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
