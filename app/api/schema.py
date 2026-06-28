@@ -10,6 +10,11 @@ class ChatRequest(BaseModel):
         min_length=1,
         description="Prompt template version to use for this response.",
     )
+    model_config_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Configured model ID to use for this response, for example openai:gpt-4.1-mini.",
+    )
 
 
 class TokenUsageResponse(BaseModel):
@@ -23,6 +28,11 @@ class ChatResponse(BaseModel):
     conversation_id: str
     message: str
     model: str
+    model_provider: str
+    model_name: str
+    model_config_id: str
     prompt_version: str
+    retrieval_config: str
     latency_ms: int | None = None
     token_usage: TokenUsageResponse
+    estimated_cost_usd: float | None = None

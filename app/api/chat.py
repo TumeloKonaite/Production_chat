@@ -16,16 +16,22 @@ async def chat(
         message=request.message,
         conversation_id=request.conversation_id,
         prompt_version=request.prompt_version,
+        model_config_id=request.model_config_id,
     )
     return ChatResponse(
         conversation_id=response.conversation_id,
         message=response.message,
         model=response.model,
+        model_provider=response.model_provider,
+        model_name=response.model_name,
+        model_config_id=response.model_config_id,
         prompt_version=response.prompt_version,
+        retrieval_config=response.retrieval_config,
         latency_ms=response.latency_ms,
         token_usage=TokenUsageResponse(
             input_tokens=response.token_usage.input_tokens,
             output_tokens=response.token_usage.output_tokens,
             total_tokens=response.token_usage.total_tokens,
         ),
+        estimated_cost_usd=response.estimated_cost_usd,
     )

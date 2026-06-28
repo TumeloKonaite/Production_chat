@@ -14,3 +14,5 @@ wheels/
 mlflow.db
 evals/prompt_eval_results/*
 !evals/prompt_eval_results/.gitkeep
+evals/results/*
+!evals/results/.gitkeep
