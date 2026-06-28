@@ -15,6 +15,7 @@ async def chat(
     response = await chat_service.generate_reply(
         message=request.message,
         conversation_id=request.conversation_id,
+        prompt_version=request.prompt_version,
     )
     return ChatResponse(
         conversation_id=response.conversation_id,

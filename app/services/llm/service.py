@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -40,34 +39,29 @@ class LLMGeneratedResponse:
 class LLMService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._prompt_path = (
-            Path(__file__).resolve().parent.parent.parent / "prompts" / "base_system_prompt.md"
-        )
 
     @property
     def model(self) -> str:
         return self._settings.openai_model
 
-    @property
-    def prompt_version(self) -> str:
-        return self._settings.prompt_version
-
-    def load_system_prompt(self) -> str:
-        return self._load_system_prompt()
-
     async def generate_response(
         self,
         messages: Sequence[LLMChatMessage],
         *,
-        system_prompt: str | None = None,
+        system_prompt: str,
+        prompt_version: str,
+        temperature: float | None = None,
     ) -> LLMGeneratedResponse:
         api_key = self._get_api_key()
-        prompt_text = system_prompt or self._load_system_prompt()
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        payload = self._build_payload(messages=messages, system_prompt=prompt_text)
+        payload = self._build_payload(
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+        )
         started_at = perf_counter()
         response_payload = await self._request_completion(headers=headers, payload=payload)
         latency_ms = int((perf_counter() - started_at) * 1000)
@@ -83,7 +77,7 @@ class LLMService:
         return LLMGeneratedResponse(
             message=assistant_response,
             model=response_model,
-            prompt_version=self.prompt_version,
+            prompt_version=prompt_version,
             latency_ms=latency_ms,
             token_usage=self._extract_token_usage(response_payload),
         )
@@ -98,16 +92,20 @@ class LLMService:
         *,
         messages: Sequence[LLMChatMessage],
         system_prompt: str,
+        temperature: float | None,
     ) -> dict[str, Any]:
         prompt_messages = [{"role": "developer", "content": system_prompt}]
         prompt_messages.extend(
             {"role": message.role, "content": message.content} for message in messages
         )
-        return {
+        payload = {
             "model": self.model,
             # Keep the prompt on the server so the frontend never handles model instructions or secrets.
             "messages": prompt_messages,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        return payload
 
     async def _request_completion(
         self,
@@ -128,12 +126,6 @@ class LLMService:
             raise LLMServiceError() from exc
         except ValueError as exc:
             raise LLMServiceError() from exc
-
-    def _load_system_prompt(self) -> str:
-        try:
-            return self._prompt_path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise LLMConfigurationError() from exc
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         # Support both plain string content and structured content blocks from the provider response.
