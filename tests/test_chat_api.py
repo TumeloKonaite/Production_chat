@@ -12,10 +12,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.config import Settings
+from app.infrastructure.llm import UnknownModelError
 from app.main import app
 from app.repositories.db.base import Base
 from app.repositories.models import Conversation, Message, RetrievalLog
-from app.services.llm import LLMChatMessage, LLMGeneratedResponse, LLMServiceError, TokenUsage
+from app.services.llm import (
+    LLMChatMessage,
+    LLMGeneratedResponse,
+    LLMServiceError,
+    ModelConfig,
+    TokenUsage,
+)
 from app.services.retrieval import RetrievedChunk
 
 
@@ -35,10 +42,40 @@ class FakeLLMService:
     ) -> None:
         self.reply = reply
         self.fail = fail
-        self.model = "gpt-4.1-mini"
+        self.default_model_config_id = "openai:gpt-4.1-mini"
         self.calls: list[list[LLMChatMessage]] = []
         self.system_prompts: list[str] = []
         self.prompt_versions: list[str] = []
+        self.model_config_ids: list[str] = []
+
+    @property
+    def model(self) -> str:
+        return self.get_model_config().model
+
+    def get_model_config(self, model_config_id: str | None = None) -> ModelConfig:
+        configs = {
+            "openai:gpt-4.1-mini": ModelConfig(
+                config_id="openai:gpt-4.1-mini",
+                provider="openai",
+                model="gpt-4.1-mini",
+                input_cost_per_1m_tokens=0.40,
+                output_cost_per_1m_tokens=1.60,
+            ),
+            "openai:gpt-4.1": ModelConfig(
+                config_id="openai:gpt-4.1",
+                provider="openai",
+                model="gpt-4.1",
+                input_cost_per_1m_tokens=2.00,
+                output_cost_per_1m_tokens=8.00,
+            ),
+        }
+        normalized_model_config_id = model_config_id or self.default_model_config_id
+        if ":" not in normalized_model_config_id:
+            normalized_model_config_id = f"openai:{normalized_model_config_id}"
+        model_config = configs.get(normalized_model_config_id)
+        if model_config is None:
+            raise UnknownModelError(normalized_model_config_id, sorted(configs))
+        return model_config
 
     async def generate_response(
         self,
@@ -46,7 +83,9 @@ class FakeLLMService:
         *,
         system_prompt: str,
         prompt_version: str,
+        retrieval_config: str = "default",
         temperature: float | None = None,
+        model_config_id: str | None = None,
     ) -> LLMGeneratedResponse:
         self.calls.append(list(messages))
         self.system_prompts.append(system_prompt)
@@ -54,16 +93,27 @@ class FakeLLMService:
         if self.fail:
             raise LLMServiceError("sk-test-should-not-leak")
 
+        selected_model = self.get_model_config(model_config_id)
+        self.model_config_ids.append(selected_model.config_id)
+        estimated_cost_usd = (
+            0.000768 if selected_model.config_id == "openai:gpt-4.1-mini" else 0.00384
+        )
+
         return LLMGeneratedResponse(
             message=self.reply,
-            model=self.model,
+            model=selected_model.model,
+            model_provider=selected_model.provider,
+            model_name=selected_model.model,
+            model_config_id=selected_model.config_id,
             prompt_version=prompt_version,
+            retrieval_config=retrieval_config,
             latency_ms=842,
             token_usage=TokenUsage(
                 input_tokens=1200,
                 output_tokens=180,
                 total_tokens=1380,
             ),
+            estimated_cost_usd=estimated_cost_usd,
         )
 
 
@@ -105,15 +155,17 @@ def build_test_settings(*, default_prompt_version: str = "v1_professional") -> S
     return Settings(
         database_url="sqlite:///unused-for-tests.db",
         openai_api_key="test-key",
-        openai_model="gpt-4.1-mini",
+        default_model_config_id="openai:gpt-4.1-mini",
         knowledge_embedding_model="all-MiniLM-L6-v2",
         knowledge_collection_name="personal_knowledge_base",
         default_prompt_version=default_prompt_version,
         conversation_history_limit=10,
         retrieval_top_k=5,
         retrieval_min_similarity=0.55,
+        default_retrieval_config="default",
+        enable_mlflow_tracking=False,
         mlflow_tracking_uri=None,
-        mlflow_experiment_name="portfolio-chatbot-prompt-experiments",
+        mlflow_experiment_name="personal-chatbot-model-comparison",
     )
 
 
@@ -189,19 +241,24 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
         "conversation_id": body["conversation_id"],
         "message": "Tumelo has worked on AI systems.",
         "model": "gpt-4.1-mini",
+        "model_provider": "openai",
+        "model_name": "gpt-4.1-mini",
+        "model_config_id": "openai:gpt-4.1-mini",
         "prompt_version": "v1_professional",
+        "retrieval_config": "default",
         "latency_ms": 842,
         "token_usage": {
             "input_tokens": 1200,
             "output_tokens": 180,
             "total_tokens": 1380,
         },
+        "estimated_cost_usd": 0.000768,
     }
 
     with session_factory() as session:
         conversation = session.get(Conversation, body["conversation_id"])
         assert conversation is not None
-        assert conversation.model == "gpt-4.1-mini"
+        assert conversation.model == "openai:gpt-4.1-mini"
         assert conversation.prompt_version == "v1_professional"
 
 
@@ -224,11 +281,16 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert messages[0].model is None
     assert messages[1].content == "Production readiness is strongest in the RAG stack."
     assert messages[1].model == "gpt-4.1-mini"
+    assert messages[1].model_provider == "openai"
+    assert messages[1].model_name == "gpt-4.1-mini"
+    assert messages[1].model_config_id == "openai:gpt-4.1-mini"
     assert messages[1].prompt_version == "v1_professional"
+    assert messages[1].retrieval_config == "default"
     assert messages[1].latency_ms == 842
     assert messages[1].input_tokens == 1200
     assert messages[1].output_tokens == 180
     assert messages[1].total_tokens == 1380
+    assert messages[1].estimated_cost_usd == pytest.approx(0.000768)
 
 
 def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:
@@ -258,6 +320,7 @@ def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_
         ("user", "Tell me about Tumelo's AI projects"),
     ]
     assert fake_llm.prompt_versions == ["v1_professional", "v1_professional"]
+    assert fake_llm.model_config_ids == ["openai:gpt-4.1-mini", "openai:gpt-4.1-mini"]
     assert [(message.role, message.content) for message in fake_llm.calls[1]] == [
         ("user", "Tell me about Tumelo's AI projects"),
         ("assistant", "Mocked assistant response."),
@@ -343,7 +406,7 @@ def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
     with session_factory() as session:
         conversation = Conversation(
             id=conversation_id,
-            model="gpt-4.1-mini",
+            model="openai:gpt-4.1-mini",
             prompt_version="v1_professional",
             created_at=base_time,
             updated_at=base_time,
@@ -418,12 +481,18 @@ def test_chat_personal_query_without_context_returns_safe_fallback(tmp_path) -> 
     assert response.json()["message"] == (
         "I do not have enough approved information about that in Tumelo's knowledge base yet."
     )
+    assert response.json()["model_config_id"] == "openai:gpt-4.1-mini"
+    assert response.json()["estimated_cost_usd"] is None
     assert fake_llm.calls == []
 
     logs = fetch_retrieval_logs(session_factory)
     assert len(logs) == 1
     assert logs[0].retrieved_chunk_ids == []
     assert logs[0].used_fallback is True
+
+    messages = fetch_messages(session_factory)
+    assert messages[1].model_config_id == "openai:gpt-4.1-mini"
+    assert messages[1].estimated_cost_usd is None
 
 
 def test_chat_general_question_without_context_still_uses_llm(tmp_path) -> None:
@@ -438,6 +507,7 @@ def test_chat_general_question_without_context_still_uses_llm(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["message"] == "RAG combines retrieval with generation."
     assert len(fake_llm.calls) == 1
+    assert response.json()["model_config_id"] == "openai:gpt-4.1-mini"
     assert "No relevant approved Tumelo context was retrieved for this turn" in fake_llm.system_prompts[0]
 
     logs = fetch_retrieval_logs(session_factory)
@@ -471,6 +541,57 @@ def test_chat_uses_requested_prompt_version(tmp_path) -> None:
         conversation = session.get(Conversation, response.json()["conversation_id"])
         assert conversation is not None
         assert conversation.prompt_version == "v2_warm_conversational"
+
+
+def test_chat_uses_requested_model_config_id(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tumelo also builds higher-capability AI systems.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "Tell me about Tumelo's AI systems.",
+            "model_config_id": "openai:gpt-4.1",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "gpt-4.1"
+    assert body["model_name"] == "gpt-4.1"
+    assert body["model_config_id"] == "openai:gpt-4.1"
+    assert body["estimated_cost_usd"] == 0.00384
+    assert fake_llm.model_config_ids == ["openai:gpt-4.1"]
+
+    messages = fetch_messages(session_factory)
+    assert messages[1].model_name == "gpt-4.1"
+    assert messages[1].model_config_id == "openai:gpt-4.1"
+    assert messages[1].estimated_cost_usd == pytest.approx(0.00384)
+
+    with session_factory() as session:
+        conversation = session.get(Conversation, body["conversation_id"])
+        assert conversation is not None
+        assert conversation.model == "openai:gpt-4.1"
+
+
+def test_chat_rejects_unknown_model_config_id(tmp_path) -> None:
+    fake_llm = FakeLLMService()
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        "/chat",
+        json={"message": "Tell me about Tumelo.", "model_config_id": "openai:nope"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Unknown model config ID: openai:nope. Available models: openai:gpt-4.1, openai:gpt-4.1-mini"
+    }
+    assert fetch_messages(session_factory) == []
 
 
 def test_chat_rejects_unknown_prompt_version(tmp_path) -> None:

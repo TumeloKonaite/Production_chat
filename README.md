@@ -1,6 +1,6 @@
 # Production Chatbot
 
-Simple FastAPI backend for a personal website chatbot. The frontend sends a message to `POST /chat`, the backend calls the LLM with a server-side API key, stores the conversation in PostgreSQL, and returns a JSON assistant reply.
+Simple FastAPI backend for a personal website chatbot. The frontend sends a message to `POST /chat`, the backend calls the configured LLM with a server-side API key, stores production chat metadata in PostgreSQL, and can run offline model comparisons with MLflow-backed eval artifacts.
 
 ## Project structure
 
@@ -16,11 +16,19 @@ app/
     schema.py
   Dockerfile
   infrastructure/
+    llm/
+      base.py
+      model_config.py
+      model_registry.py
+      openai_client.py
     prompts/
       prompt_loader.py
       templates/
         v1_professional.md
         v2_warm_conversational.md
+    tracking/
+      experiment_tracker.py
+      mlflow_client.py
   repositories/
     chat_repository.py
     db/
@@ -30,16 +38,19 @@ app/
   services/
     chat/
       errors.py
+      prompting.py
       service.py
+    evals/
+      eval_service.py
+      model_experiment_service.py
     llm/
       errors.py
       service.py
-    chat/
-      prompting.py
 evals/
-  prompt_eval_questions.jsonl
-scripts/
-  compare_prompts.py
+  datasets/
+    personal_chatbot_eval_set.jsonl
+  results/
+  run_model_eval.py
 alembic/
   versions/
 tests/
@@ -54,14 +65,18 @@ Create `.env` from `.env.example` and set:
 POSTGRES_DB=production_chatbot
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
-DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5433/production_chatbot
+DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
+DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
+OPENAI_MODEL=gpt-4.1-mini
 DEFAULT_PROMPT_VERSION=v1_professional
 CONVERSATION_HISTORY_LIMIT=10
 RETRIEVAL_TOP_K=5
-MLFLOW_TRACKING_URI=
-MLFLOW_EXPERIMENT_NAME=portfolio-chatbot-prompt-experiments
+RETRIEVAL_MIN_SIMILARITY=0.55
+DEFAULT_RETRIEVAL_CONFIG=default
+ENABLE_MLFLOW_TRACKING=false
+MLFLOW_TRACKING_URI=http://localhost:5000
+MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
 ```
 
 ## Local setup
@@ -78,7 +93,7 @@ Run the database migration:
 alembic upgrade head
 ```
 
-If you want the local Postgres instance from `docker-compose.yml`, start it first so the database is listening on `127.0.0.1:5433`:
+If you want the local Postgres instance from `docker-compose.yml`, start it first so the database is listening on `127.0.0.1:5434`:
 
 ```bash
 docker compose up -d db
@@ -117,29 +132,39 @@ Example response:
   "conversation_id": "c9ef4d5d-1e4b-4f78-8d3c-4e3f9f0a7a2d",
   "message": "Tumelo has worked on AI chatbots, RAG systems, FastAPI backends, automation workflows, and production-ready AI applications.",
   "model": "gpt-4.1-mini",
+  "model_provider": "openai",
+  "model_name": "gpt-4.1-mini",
+  "model_config_id": "openai:gpt-4.1-mini",
   "prompt_version": "v2_warm_conversational",
+  "retrieval_config": "default",
   "latency_ms": 842,
   "token_usage": {
     "input_tokens": 1200,
     "output_tokens": 180,
     "total_tokens": 1380
-  }
+  },
+  "estimated_cost_usd": 0.000768
 }
 ```
 
-## Prompt experiments
+## Model experiments
 
-Runtime prompt selection loads versioned templates from `app/infrastructure/prompts/templates`.
+Runtime prompt selection still loads versioned templates from `app/infrastructure/prompts/templates`.
 If `prompt_version` is omitted in the API request, the backend falls back to `DEFAULT_PROMPT_VERSION`.
+If `model_config_id` is omitted, the backend falls back to `DEFAULT_MODEL_CONFIG_ID`.
 
-Run the prompt comparison workflow:
+Run the model comparison workflow:
 
 ```bash
-mlflow ui
-python scripts/compare_prompts.py
+mlflow server --host 0.0.0.0 --port 5000
+python evals/run_model_eval.py \
+  --models openai:gpt-4.1-mini openai:gpt-4.1 \
+  --prompt-version v1_professional \
+  --dataset evals/datasets/personal_chatbot_eval_set.jsonl \
+  --experiment-name personal-chatbot-model-comparison
 ```
 
-Artifacts are written under `evals/prompt_eval_results/` and logged to the MLflow experiment named by `MLFLOW_EXPERIMENT_NAME`.
+Artifacts are written under `evals/results/`. When `ENABLE_MLFLOW_TRACKING=true` and `MLFLOW_TRACKING_URI` is reachable, the runner logs one MLflow run per model plus JSON and summary artifacts.
 
 ## Tests
 

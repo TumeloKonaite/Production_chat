@@ -32,9 +32,14 @@ class ChatReply:
     conversation_id: str
     message: str
     model: str
+    model_provider: str
+    model_name: str
+    model_config_id: str
     prompt_version: str
+    retrieval_config: str
     latency_ms: int | None
     token_usage: TokenUsage
+    estimated_cost_usd: float | None
 
 
 class ChatService:
@@ -63,6 +68,7 @@ class ChatService:
         message: str,
         conversation_id: str | None = None,
         prompt_version: str | None = None,
+        model_config_id: str | None = None,
     ) -> ChatReply:
         normalized_message = message.strip()
         if not normalized_message:
@@ -74,8 +80,13 @@ class ChatService:
         conversation = self._get_or_create_conversation(
             conversation_id,
             prompt_version=selected_prompt_version,
+            model_config_id=model_config_id,
         )
         conversation.prompt_version = selected_prompt_version
+        selected_model_config = self.llm_service.get_model_config(
+            model_config_id or conversation.model
+        )
+        conversation.model = selected_model_config.config_id
 
         try:
             # Persist the user turn before calling the LLM so failed generations still leave a trace.
@@ -105,6 +116,7 @@ class ChatService:
             llm_response = self._build_direct_response(
                 normalized_message,
                 prompt_version=selected_prompt_version,
+                model_config_id=selected_model_config.config_id,
             )
         else:
             llm_messages = [
@@ -120,6 +132,8 @@ class ChatService:
                 llm_messages,
                 system_prompt=system_prompt,
                 prompt_version=selected_prompt_version,
+                retrieval_config=self.settings.default_retrieval_config,
+                model_config_id=selected_model_config.config_id,
             )
 
         # Only persist the assistant turn after the final response succeeds.
@@ -129,9 +143,14 @@ class ChatService:
             conversation_id=conversation.id,
             message=llm_response.message,
             model=llm_response.model,
+            model_provider=llm_response.model_provider,
+            model_name=llm_response.model_name,
+            model_config_id=llm_response.model_config_id,
             prompt_version=llm_response.prompt_version,
+            retrieval_config=llm_response.retrieval_config,
             latency_ms=llm_response.latency_ms,
             token_usage=llm_response.token_usage,
+            estimated_cost_usd=llm_response.estimated_cost_usd,
         )
 
     def _get_or_create_conversation(
@@ -139,9 +158,13 @@ class ChatService:
         conversation_id: str | None,
         *,
         prompt_version: str,
+        model_config_id: str | None,
     ):
         if conversation_id is None:
-            return self._create_conversation(prompt_version=prompt_version)
+            return self._create_conversation(
+                prompt_version=prompt_version,
+                model_config_id=model_config_id,
+            )
 
         self._validate_conversation_id(conversation_id)
         try:
@@ -152,12 +175,21 @@ class ChatService:
         if conversation is None:
             raise ConversationNotFoundError("Conversation not found.")
 
+        if model_config_id is not None:
+            conversation.model = self.llm_service.get_model_config(model_config_id).config_id
+
         return conversation
 
-    def _create_conversation(self, *, prompt_version: str):
+    def _create_conversation(
+        self,
+        *,
+        prompt_version: str,
+        model_config_id: str | None,
+    ):
+        selected_model_config = self.llm_service.get_model_config(model_config_id)
         try:
             return self.repository.create_conversation(
-                model=self.llm_service.model,
+                model=selected_model_config.config_id,
                 prompt_version=prompt_version,
             )
         except ConversationRepositoryError as exc:
@@ -197,13 +229,20 @@ class ChatService:
         message: str,
         *,
         prompt_version: str,
+        model_config_id: str,
     ) -> LLMGeneratedResponse:
+        selected_model_config = self.llm_service.get_model_config(model_config_id)
         return LLMGeneratedResponse(
             message=build_direct_fallback_text(message),
-            model=self.llm_service.model,
+            model=selected_model_config.model,
+            model_provider=selected_model_config.provider,
+            model_name=selected_model_config.model,
+            model_config_id=selected_model_config.config_id,
             prompt_version=prompt_version,
-            latency_ms=None,
+            retrieval_config=self.settings.default_retrieval_config,
+            latency_ms=0,
             token_usage=TokenUsage(),
+            estimated_cost_usd=None,
         )
 
     def _store_assistant_message(
@@ -218,11 +257,16 @@ class ChatService:
                 role="assistant",
                 content=llm_response.message,
                 model=llm_response.model,
+                model_provider=llm_response.model_provider,
+                model_name=llm_response.model_name,
+                model_config_id=llm_response.model_config_id,
                 prompt_version=llm_response.prompt_version,
+                retrieval_config=llm_response.retrieval_config,
                 latency_ms=llm_response.latency_ms,
                 input_tokens=llm_response.token_usage.input_tokens,
                 output_tokens=llm_response.token_usage.output_tokens,
                 total_tokens=llm_response.token_usage.total_tokens,
+                estimated_cost_usd=llm_response.estimated_cost_usd,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc

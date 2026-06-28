@@ -3,6 +3,7 @@ from app.services.llm.service import (
     LLMChatMessage,
     LLMGeneratedResponse,
     LLMService,
+    ModelConfig,
     TokenUsage,
 )
 
@@ -12,5 +13,6 @@ __all__ = [
     "LLMGeneratedResponse",
     "LLMService",
     "LLMServiceError",
+    "ModelConfig",
     "TokenUsage",
 ]

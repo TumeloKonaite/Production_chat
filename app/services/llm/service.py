@@ -2,47 +2,52 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from time import perf_counter
-from typing import Any
-
-import httpx
 
 from app.config import Settings
-from app.services.llm.errors import LLMConfigurationError, LLMServiceError
-
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-OPENAI_TIMEOUT_SECONDS = 60.0
-
-
-@dataclass(frozen=True, slots=True)
-class LLMChatMessage:
-    role: str
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
-class TokenUsage:
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
+from app.infrastructure.llm import (
+    LLMChatMessage,
+    ModelConfig,
+    ModelRegistry,
+    OpenAIClient,
+    TokenUsage,
+)
+from app.services.llm.errors import LLMConfigurationError
 
 
 @dataclass(frozen=True, slots=True)
 class LLMGeneratedResponse:
     message: str
     model: str
+    model_provider: str
+    model_name: str
+    model_config_id: str
     prompt_version: str
+    retrieval_config: str
     latency_ms: int | None
     token_usage: TokenUsage
+    estimated_cost_usd: float | None
 
 
 class LLMService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._model_registry = ModelRegistry(
+            default_model_config_id=settings.default_model_config_id
+        )
+        self._clients = {
+            "openai": OpenAIClient(settings=settings),
+        }
 
     @property
     def model(self) -> str:
-        return self._settings.openai_model
+        return self._model_registry.get_default_model().model
+
+    @property
+    def default_model_config_id(self) -> str:
+        return self._model_registry.default_model_config_id
+
+    def get_model_config(self, model_config_id: str | None = None) -> ModelConfig:
+        return self._model_registry.resolve(model_config_id)
 
     async def generate_response(
         self,
@@ -50,131 +55,46 @@ class LLMService:
         *,
         system_prompt: str,
         prompt_version: str,
+        retrieval_config: str = "default",
         temperature: float | None = None,
+        model_config_id: str | None = None,
     ) -> LLMGeneratedResponse:
-        api_key = self._get_api_key()
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = self._build_payload(
-            messages=messages,
-            system_prompt=system_prompt,
+        model_config = self.get_model_config(model_config_id)
+        client = self._clients.get(model_config.provider)
+        if client is None:
+            raise LLMConfigurationError(
+                f"No LLM client configured for provider: {model_config.provider}"
+            )
+
+        response = await client.generate(
+            [
+                LLMChatMessage(role="developer", content=system_prompt),
+                *list(messages),
+            ],
+            model=model_config.model,
             temperature=temperature,
         )
-        started_at = perf_counter()
-        response_payload = await self._request_completion(headers=headers, payload=payload)
-        latency_ms = int((perf_counter() - started_at) * 1000)
-        assistant_response = self._extract_response_text(response_payload)
-        if not assistant_response:
-            raise LLMServiceError()
-
-        response_model = response_payload.get("model")
-        # Fall back to the configured model name when the provider omits model metadata.
-        if not isinstance(response_model, str):
-            response_model = self.model
 
         return LLMGeneratedResponse(
-            message=assistant_response,
-            model=response_model,
+            message=response.content,
+            model=response.model,
+            model_provider=model_config.provider,
+            model_name=response.model,
+            model_config_id=model_config.config_id,
             prompt_version=prompt_version,
-            latency_ms=latency_ms,
-            token_usage=self._extract_token_usage(response_payload),
-        )
-
-    def _get_api_key(self) -> str:
-        if not self._settings.openai_api_key:
-            raise LLMConfigurationError()
-        return self._settings.openai_api_key
-
-    def _build_payload(
-        self,
-        *,
-        messages: Sequence[LLMChatMessage],
-        system_prompt: str,
-        temperature: float | None,
-    ) -> dict[str, Any]:
-        prompt_messages = [{"role": "developer", "content": system_prompt}]
-        prompt_messages.extend(
-            {"role": message.role, "content": message.content} for message in messages
-        )
-        payload = {
-            "model": self.model,
-            # Keep the prompt on the server so the frontend never handles model instructions or secrets.
-            "messages": prompt_messages,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        return payload
-
-    async def _request_completion(
-        self,
-        headers: dict[str, str],
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(
-                base_url=OPENAI_BASE_URL,
-                timeout=OPENAI_TIMEOUT_SECONDS,
-            ) as client:
-                response = await client.post("/chat/completions", headers=headers, json=payload)
-                if response.status_code >= 400:
-                    raise LLMServiceError()
-
-                return response.json()
-        except httpx.HTTPError as exc:
-            raise LLMServiceError() from exc
-        except ValueError as exc:
-            raise LLMServiceError() from exc
-
-    def _extract_response_text(self, payload: dict[str, Any]) -> str:
-        # Support both plain string content and structured content blocks from the provider response.
-        content = self._get_message_content(payload)
-        return self._extract_content_text(content)
-
-    def _get_message_content(self, payload: dict[str, Any]) -> Any:
-        choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices:
-            return None
-
-        first_choice = choices[0]
-        if not isinstance(first_choice, dict):
-            return None
-
-        message = first_choice.get("message")
-        if not isinstance(message, dict):
-            return None
-
-        return message.get("content")
-
-    def _extract_content_text(self, content: Any) -> str:
-        if isinstance(content, str):
-            return content.strip()
-
-        if not isinstance(content, list):
-            return ""
-
-        parts: list[str] = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-
-        return "".join(parts).strip()
-
-    def _extract_token_usage(self, payload: dict[str, Any]) -> TokenUsage:
-        usage = payload.get("usage")
-        if not isinstance(usage, dict):
-            return TokenUsage()
-
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
-        total_tokens = usage.get("total_tokens")
-
-        return TokenUsage(
-            input_tokens=prompt_tokens if isinstance(prompt_tokens, int) else None,
-            output_tokens=completion_tokens if isinstance(completion_tokens, int) else None,
-            total_tokens=total_tokens if isinstance(total_tokens, int) else None,
+            retrieval_config=retrieval_config,
+            latency_ms=response.latency_ms,
+            token_usage=TokenUsage(
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                total_tokens=response.total_tokens,
+            ),
+            estimated_cost_usd=self._model_registry.estimate_cost(
+                model_config.config_id,
+                TokenUsage(
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    total_tokens=response.total_tokens,
+                ),
+            ),
         )

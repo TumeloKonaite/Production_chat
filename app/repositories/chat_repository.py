@@ -48,11 +48,16 @@ class ConversationRepository:
         role: str,
         content: str,
         model: str | None = None,
+        model_provider: str | None = None,
+        model_name: str | None = None,
+        model_config_id: str | None = None,
         prompt_version: str | None = None,
+        retrieval_config: str | None = None,
         latency_ms: int | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         total_tokens: int | None = None,
+        estimated_cost_usd: float | None = None,
     ) -> Message:
         conversation.updated_at = utcnow()
         message = Message(
@@ -60,11 +65,16 @@ class ConversationRepository:
             role=role,
             content=content,
             model=model,
+            model_provider=model_provider,
+            model_name=model_name,
+            model_config_id=model_config_id,
             prompt_version=prompt_version,
+            retrieval_config=retrieval_config,
             latency_ms=latency_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
         )
         self._session.add(message)
         return self._commit_and_refresh(message)
