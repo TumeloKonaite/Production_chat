@@ -1,0 +1,1 @@
+{'name': 'default', 'top_k': 5, 'min_similarity': 0.55, 'embedding_model': 'sentence-transformers/all-MiniLM-L6-v2', 'collection_name': 'personal_knowledge_base'}
