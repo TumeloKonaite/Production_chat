@@ -1,0 +1,1194 @@
+{
+  "generated_at": "2026-06-28T12:49:02+00:00",
+  "summary": {
+    "run_name": "rag_eval_prompt_v1_model_gpt_4_1_mini",
+    "dataset_name": "portfolio_eval_dataset.jsonl",
+    "model_name": "gpt-4.1-mini",
+    "model_config_id": "openai:gpt-4.1-mini",
+    "prompt_version": "v1_professional",
+    "top_k": 5,
+    "retrieval_config": {
+      "name": "default",
+      "top_k": 5,
+      "min_similarity": 0.55,
+      "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+      "collection_name": "personal_knowledge_base"
+    },
+    "total_questions": 24,
+    "avg_precision_at_k": 0.21666666666666667,
+    "avg_recall_at_k": 0.5520833333333334,
+    "avg_mrr": 0.6388888888888888,
+    "avg_ndcg_at_k": 0.5615976148109857,
+    "avg_context_relevance": 1.3333333333333333,
+    "avg_faithfulness": 2,
+    "avg_answer_relevance": 1.8333333333333333
+  },
+  "results": [
+    {
+      "question_id": "q_001",
+      "question": "What kind of AI systems has Tumelo built?",
+      "category": "projects",
+      "generated_answer": "Tumelo has built AI-powered applications that integrate language models, structured content, and backend services. His focus is on creating systems that are useful, reliable, and maintainable rather than just novel. This includes practical AI applications involving LLM integration, prompt grounding, retrieval preparation, and chatbot product design, with an emphasis on production-ready AI products and backend APIs.",
+      "expected_source_documents": [
+        "projects.md",
+        "profile.md",
+        "experience.md"
+      ],
+      "retrieved_source_documents": [
+        "experience.md",
+        "skills.md",
+        "contact.md",
+        "profile.md",
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "practical AI systems",
+        "LLM-backed chat experiences",
+        "knowledge-grounded assistants",
+        "retrieval-oriented AI systems",
+        "backend services"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.4,
+        "recall_at_k": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.6713860725233041
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes detailed information about Tumelo's experience building AI-powered applications, LLM integration, retrieval preparation, chatbot design, backend services, and practical AI systems."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The generated answer closely follows the retrieved context without adding unsupported claims or exaggerations."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question by describing the types of AI systems Tumelo has built, including practical AI applications, LLM-backed chat experiences, retrieval-oriented systems, and backend services."
+        }
+      },
+      "latency_ms": 3552,
+      "token_usage": {
+        "answer_input_tokens": 530,
+        "answer_output_tokens": 72,
+        "answer_total_tokens": 602,
+        "judge_input_tokens": 728,
+        "judge_output_tokens": 153,
+        "judge_total_tokens": 881
+      }
+    },
+    {
+      "question_id": "q_002",
+      "question": "Does Tumelo have experience with FastAPI?",
+      "category": "skills",
+      "generated_answer": "Yes, Tumelo has experience building backend services using FastAPI. He focuses on schema design, dependency injection, persistence, and operational simplicity, often implementing FastAPI alongside SQLAlchemy and well-scoped service layers.",
+      "expected_source_documents": [
+        "projects.md",
+        "skills.md"
+      ],
+      "retrieved_source_documents": [
+        "projects.md"
+      ],
+      "expected_answer_points": [
+        "FastAPI backend",
+        "backend service design",
+        "API schema definition",
+        "service layers"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 0.5,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.6131471927654584
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context explicitly mentions FastAPI, backend service design, API schema design, and service layers."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer closely follows the retrieved context without adding unsupported information."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question about Tumelo's experience with FastAPI."
+        }
+      },
+      "latency_ms": 7565,
+      "token_usage": {
+        "answer_input_tokens": 311,
+        "answer_output_tokens": 42,
+        "answer_total_tokens": 353,
+        "judge_input_tokens": 468,
+        "judge_output_tokens": 113,
+        "judge_total_tokens": 581
+      }
+    },
+    {
+      "question_id": "q_003",
+      "question": "Can Tumelo help build a production chatbot?",
+      "category": "chatbot",
+      "generated_answer": "Yes, Tumelo can help build a production chatbot. His expertise includes designing and developing LLM-backed chat experiences, knowledge-grounded assistants, and practical AI applications involving prompt grounding and retrieval preparation. He focuses on creating reliable, maintainable AI-powered applications and deployment-ready backend services, making him well-suited for building production chatbots.",
+      "expected_source_documents": [
+        "profile.md",
+        "projects.md",
+        "skills.md",
+        "experience.md"
+      ],
+      "retrieved_source_documents": [
+        "skills.md",
+        "profile.md",
+        "contact.md",
+        "experience.md"
+      ],
+      "expected_answer_points": [
+        "retrieval-augmented generation applications",
+        "LLM integration",
+        "backend services",
+        "knowledge-grounded assistants",
+        "production readiness"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.6,
+        "recall_at_k": 0.75,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.8048099750039491
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes detailed information about Tumelo's skills and experience relevant to building production chatbots, including LLM integration, knowledge-grounded assistants, backend services, and production readiness."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer is fully supported by the retrieved context without any invented or exaggerated claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question by confirming Tumelo's capability to build production chatbots and citing relevant expertise."
+        }
+      },
+      "latency_ms": 3295,
+      "token_usage": {
+        "answer_input_tokens": 472,
+        "answer_output_tokens": 67,
+        "answer_total_tokens": 539,
+        "judge_input_tokens": 668,
+        "judge_output_tokens": 141,
+        "judge_total_tokens": 809
+      }
+    },
+    {
+      "question_id": "q_004",
+      "question": "What is Tumelo's core professional focus?",
+      "category": "profile",
+      "generated_answer": "Tumelo's core professional focus is on turning AI ideas into reliable products. This includes work on LLM-backed chat experiences, knowledge-grounded assistants, automation workflows, API design, and deployment-ready backend services.",
+      "expected_source_documents": [
+        "profile.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md",
+        "profile.md",
+        "education.md",
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "data scientist",
+        "software engineer",
+        "practical AI systems",
+        "backend APIs",
+        "production-ready data products"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes detailed information from the 'Core Focus' and 'Summary' sections directly related to Tumelo's professional focus."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer is strictly supported by the retrieved context without any invented or exaggerated claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question by summarizing Tumelo's core professional focus as described in the retrieved context."
+        }
+      },
+      "latency_ms": 2826,
+      "token_usage": {
+        "answer_input_tokens": 468,
+        "answer_output_tokens": 42,
+        "answer_total_tokens": 510,
+        "judge_input_tokens": 626,
+        "judge_output_tokens": 130,
+        "judge_total_tokens": 756
+      }
+    },
+    {
+      "question_id": "q_005",
+      "question": "How does Tumelo approach backend engineering?",
+      "category": "skills",
+      "generated_answer": "Tumelo approaches backend engineering with a strong focus on clear API behavior, well-designed data storage, and maintaining clean internal boundaries between transport, business logic, and persistence layers. He emphasizes schema design, dependency injection, and operational simplicity, often using FastAPI and SQLAlchemy. His work prioritizes production readiness, clean interfaces, and systems that remain maintainable beyond the prototype stage.",
+      "expected_source_documents": [
+        "projects.md",
+        "skills.md",
+        "experience.md"
+      ],
+      "retrieved_source_documents": [
+        "projects.md",
+        "profile.md",
+        "experience.md",
+        "contact.md",
+        "experience.md"
+      ],
+      "expected_answer_points": [
+        "schema design",
+        "dependency injection",
+        "SQLAlchemy",
+        "persistence layer",
+        "clean internal boundaries"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.4,
+        "recall_at_k": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.7039180890341347
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes detailed information on schema design, dependency injection, SQLAlchemy, persistence, and clean internal boundaries, all relevant to the question."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer is fully supported by the retrieved context without any invented or exaggerated claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses how Tumelo approaches backend engineering, covering all expected points."
+        }
+      },
+      "latency_ms": 3132,
+      "token_usage": {
+        "answer_input_tokens": 525,
+        "answer_output_tokens": 75,
+        "answer_total_tokens": 600,
+        "judge_input_tokens": 721,
+        "judge_output_tokens": 127,
+        "judge_total_tokens": 848
+      }
+    },
+    {
+      "question_id": "q_006",
+      "question": "What does the portfolio chatbot backend currently support?",
+      "category": "projects",
+      "generated_answer": "The portfolio chatbot backend currently supports structured chat requests and stores conversation history. It is built with FastAPI and is designed to evolve from a prompt-only assistant into a retrieval-grounded experience backed by a curated knowledge base.",
+      "expected_source_documents": [
+        "projects.md"
+      ],
+      "retrieved_source_documents": [
+        "projects.md"
+      ],
+      "expected_answer_points": [
+        "structured chat requests",
+        "conversation history",
+        "personal website chatbot",
+        "retrieval-grounded experience"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context contains all the key information needed to answer the question."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer strictly reflects the information present in the retrieved context without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses what the portfolio chatbot backend currently supports."
+        }
+      },
+      "latency_ms": 3331,
+      "token_usage": {
+        "answer_input_tokens": 323,
+        "answer_output_tokens": 43,
+        "answer_total_tokens": 366,
+        "judge_input_tokens": 479,
+        "judge_output_tokens": 108,
+        "judge_total_tokens": 587
+      }
+    },
+    {
+      "question_id": "q_007",
+      "question": "What is the knowledge base pipeline responsible for?",
+      "category": "projects",
+      "generated_answer": "The knowledge base pipeline is responsible for loading markdown source documents, cleaning the text, splitting the content into retrieval-friendly chunks, and storing those chunks with metadata in the database. It is designed to support re-ingestion whenever profile content changes.",
+      "expected_source_documents": [
+        "projects.md"
+      ],
+      "retrieved_source_documents": [
+        "projects.md"
+      ],
+      "expected_answer_points": [
+        "loads markdown source documents",
+        "cleans text",
+        "splits content into chunks",
+        "stores chunks with metadata",
+        "re-ingestion"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context directly describes the knowledge base pipeline and its responsibilities."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The generated answer closely matches the retrieved context without adding unsupported information."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer fully and directly addresses the question with all key points from the context."
+        }
+      },
+      "latency_ms": 2745,
+      "token_usage": {
+        "answer_input_tokens": 317,
+        "answer_output_tokens": 47,
+        "answer_total_tokens": 364,
+        "judge_input_tokens": 484,
+        "judge_output_tokens": 106,
+        "judge_total_tokens": 590
+      }
+    },
+    {
+      "question_id": "q_008",
+      "question": "What skills does Tumelo bring to AI application development?",
+      "category": "skills",
+      "generated_answer": "Tumelo brings practical skills in AI application development that include LLM integration, prompt grounding, retrieval preparation, and chatbot product design. His expertise focuses on building reliable and maintainable AI-powered applications that combine language models, structured content, and backend services. This includes designing and deploying production-ready AI systems and backend APIs, particularly for retrieval-augmented generation (RAG) applications and knowledge-grounded assistants.",
+      "expected_source_documents": [
+        "skills.md",
+        "profile.md"
+      ],
+      "retrieved_source_documents": [
+        "skills.md",
+        "profile.md",
+        "experience.md",
+        "education.md",
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "LLM integration",
+        "prompt grounding",
+        "retrieval preparation",
+        "chatbot product design",
+        "practical AI applications"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.4,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved chunks comprehensively cover Tumelo's skills in LLM integration, prompt grounding, retrieval preparation, chatbot product design, and practical AI applications."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer strictly reflects the information present in the retrieved context without adding unsupported claims or exaggerations."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question by listing the relevant skills Tumelo brings to AI application development."
+        }
+      },
+      "latency_ms": 3720,
+      "token_usage": {
+        "answer_input_tokens": 530,
+        "answer_output_tokens": 81,
+        "answer_total_tokens": 611,
+        "judge_input_tokens": 728,
+        "judge_output_tokens": 134,
+        "judge_total_tokens": 862
+      }
+    },
+    {
+      "question_id": "q_009",
+      "question": "What kind of experience does Tumelo have with retrieval and knowledge systems?",
+      "category": "experience",
+      "generated_answer": "Tumelo Konaite has experience building retrieval-augmented generation (RAG) applications, which combine language models with structured content and backend services. His work emphasizes creating AI-powered systems that are useful, reliable, and maintainable, focusing on practical AI and production-ready data products. This includes designing backend APIs and data-driven systems that support effective information retrieval and knowledge integration.",
+      "expected_source_documents": [
+        "experience.md",
+        "projects.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md",
+        "education.md",
+        "experience.md",
+        "contact.md",
+        "skills.md"
+      ],
+      "expected_answer_points": [
+        "structured source material",
+        "search and retrieval",
+        "grounded chatbot responses",
+        "retrieval workflows"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 0.5,
+        "mrr": 0.3333333333333333,
+        "ndcg_at_k": 0.3065735963827292
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes relevant information from experience.md and other sources about Tumelo's work with AI systems, retrieval-augmented generation, structured content, backend services, and data-driven systems."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer is fully supported by the retrieved context, accurately reflecting Tumelo's experience with RAG applications, backend APIs, and practical AI systems without adding unsupported claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and fully addresses the question by describing Tumelo's experience with retrieval and knowledge systems, including RAG applications, structured content, and backend services."
+        }
+      },
+      "latency_ms": 4172,
+      "token_usage": {
+        "answer_input_tokens": 521,
+        "answer_output_tokens": 74,
+        "answer_total_tokens": 595,
+        "judge_input_tokens": 705,
+        "judge_output_tokens": 167,
+        "judge_total_tokens": 872
+      }
+    },
+    {
+      "question_id": "q_010",
+      "question": "How would you describe Tumelo's working style?",
+      "category": "profile",
+      "generated_answer": "Tumelo's working style emphasizes clarity, iteration, and production readiness. He structures projects around clean interfaces, measurable outcomes, and designs systems that remain maintainable beyond the prototype stage.",
+      "expected_source_documents": [
+        "profile.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "clarity",
+        "iteration",
+        "production readiness",
+        "clean interfaces",
+        "measurable outcomes"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context directly contains all the information needed to answer the question about Tumelo's working style."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The generated answer strictly reflects the retrieved context without adding unsupported or invented details."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer fully and directly addresses the question by covering all expected points from the retrieved context."
+        }
+      },
+      "latency_ms": 2749,
+      "token_usage": {
+        "answer_input_tokens": 307,
+        "answer_output_tokens": 36,
+        "answer_total_tokens": 343,
+        "judge_input_tokens": 453,
+        "judge_output_tokens": 117,
+        "judge_total_tokens": 570
+      }
+    },
+    {
+      "question_id": "q_011",
+      "question": "What opportunities is Tumelo open to discussing?",
+      "category": "contact",
+      "generated_answer": "Tumelo is open to conversations about AI products, backend engineering, data-driven systems, and applied large language model (LLM) work.",
+      "expected_source_documents": [
+        "contact.md"
+      ],
+      "retrieved_source_documents": [
+        "contact.md"
+      ],
+      "expected_answer_points": [
+        "AI products",
+        "backend engineering",
+        "data-driven systems",
+        "applied LLM work"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context explicitly lists the opportunities Tumelo is open to discussing, matching the question."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer is directly supported by the retrieved context without any additions or exaggerations."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer fully and directly addresses the user's question by listing all the opportunities mentioned in the context."
+        }
+      },
+      "latency_ms": 2649,
+      "token_usage": {
+        "answer_input_tokens": 296,
+        "answer_output_tokens": 28,
+        "answer_total_tokens": 324,
+        "judge_input_tokens": 436,
+        "judge_output_tokens": 117,
+        "judge_total_tokens": 553
+      }
+    },
+    {
+      "question_id": "q_012",
+      "question": "What kind of collaboration does Tumelo prefer?",
+      "category": "contact",
+      "generated_answer": "Tumelo prefers collaboration that emphasizes clarity, iteration, and production readiness. He structures projects around clean interfaces, measurable outcomes, and systems designed to be maintainable beyond the prototype stage.",
+      "expected_source_documents": [
+        "contact.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "practical product work",
+        "clear ownership",
+        "dependable delivery",
+        "prototype to production"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context discusses Tumelo's working style but does not explicitly mention collaboration preferences."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer accurately reflects the information present in the retrieved context without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 1,
+          "reason": "The answer partially addresses the question by describing Tumelo's working style, but it does not explicitly state the kind of collaboration Tumelo prefers as expected."
+        }
+      },
+      "latency_ms": 3343,
+      "token_usage": {
+        "answer_input_tokens": 305,
+        "answer_output_tokens": 36,
+        "answer_total_tokens": 341,
+        "judge_input_tokens": 452,
+        "judge_output_tokens": 127,
+        "judge_total_tokens": 579
+      }
+    },
+    {
+      "question_id": "q_013",
+      "question": "What education details are actually available in the knowledge base?",
+      "category": "education",
+      "generated_answer": "I do not have enough approved information about that in Tumelo's knowledge base yet.",
+      "expected_source_documents": [
+        "education.md"
+      ],
+      "retrieved_source_documents": [],
+      "expected_answer_points": [
+        "applied learning",
+        "software engineering",
+        "AI systems",
+        "data work",
+        "specific institution degree and graduation details are not published yet"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 0,
+          "reason": "No context was retrieved to support the answer."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer honestly states the lack of approved information, which aligns with the empty retrieved context."
+        },
+        "answer_relevance": {
+          "score": 1,
+          "reason": "The answer admits lack of information but does not specify any education details available, which partially addresses the question."
+        }
+      },
+      "latency_ms": 2159,
+      "token_usage": {
+        "answer_input_tokens": 0,
+        "answer_output_tokens": 0,
+        "answer_total_tokens": 0,
+        "judge_input_tokens": 396,
+        "judge_output_tokens": 112,
+        "judge_total_tokens": 508
+      }
+    },
+    {
+      "question_id": "q_014",
+      "question": "What areas has Tumelo studied or learned in depth?",
+      "category": "education",
+      "generated_answer": "Tumelo has studied and learned in depth across software engineering, AI systems, and data work. This strong applied learning profile reflects expertise in these areas.",
+      "expected_source_documents": [
+        "education.md"
+      ],
+      "retrieved_source_documents": [
+        "education.md"
+      ],
+      "expected_answer_points": [
+        "data science",
+        "machine learning",
+        "backend engineering",
+        "system design",
+        "practical product development"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context mentions Tumelo's applied learning in software engineering, AI systems, and data work, which partially covers the expected areas but lacks specific mention of data science, machine learning, backend engineering, system design, and practical product development."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer accurately reflects the information present in the retrieved context without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 1,
+          "reason": "The answer addresses the question by listing areas Tumelo has studied but does so in general terms and does not fully enumerate the specific expected areas."
+        }
+      },
+      "latency_ms": 3049,
+      "token_usage": {
+        "answer_input_tokens": 298,
+        "answer_output_tokens": 30,
+        "answer_total_tokens": 328,
+        "judge_input_tokens": 440,
+        "judge_output_tokens": 156,
+        "judge_total_tokens": 596
+      }
+    },
+    {
+      "question_id": "q_015",
+      "question": "What recurring project themes show up in Tumelo's work?",
+      "category": "projects",
+      "generated_answer": "Recurring themes in Tumelo's work include a strong focus on clarity, iteration, and production readiness. Projects are typically structured around clean interfaces, measurable outcomes, and building systems that remain maintainable beyond the prototype stage. This approach reflects Tumelo's emphasis on delivering practical, sustainable solutions in data science, software engineering, and AI systems.",
+      "expected_source_documents": [
+        "projects.md",
+        "profile.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "automation workflows",
+        "backend APIs",
+        "retrieval-grounded systems",
+        "clean interfaces",
+        "maintainable products"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 0.5,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.6131471927654584
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context mentions clean interfaces and maintainable systems but does not explicitly mention automation workflows, backend APIs, or retrieval-grounded systems."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer accurately reflects the information present in the retrieved context without adding unsupported claims."
+        },
+        "answer_relevance": {
+          "score": 1,
+          "reason": "The answer addresses some recurring themes but omits several expected themes such as automation workflows, backend APIs, and retrieval-grounded systems."
+        }
+      },
+      "latency_ms": 3268,
+      "token_usage": {
+        "answer_input_tokens": 311,
+        "answer_output_tokens": 67,
+        "answer_total_tokens": 378,
+        "judge_input_tokens": 494,
+        "judge_output_tokens": 133,
+        "judge_total_tokens": 627
+      }
+    },
+    {
+      "question_id": "q_016",
+      "question": "Does Tumelo have experience turning prototypes into production-ready systems?",
+      "category": "experience",
+      "generated_answer": "Yes, Tumelo values clarity, iteration, and production readiness in projects. He focuses on building systems with clean interfaces, measurable outcomes, and maintainability beyond the prototype stage, emphasizing reliable and production-ready AI applications.",
+      "expected_source_documents": [
+        "profile.md",
+        "skills.md",
+        "contact.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md",
+        "contact.md",
+        "profile.md",
+        "experience.md"
+      ],
+      "expected_answer_points": [
+        "production readiness",
+        "path from prototype to production",
+        "dependable delivery",
+        "staged delivery"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.4,
+        "recall_at_k": 0.6666666666666666,
+        "mrr": 1.0,
+        "ndcg_at_k": 0.7653606369886217
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context includes multiple relevant sections describing Tumelo's focus on production readiness, maintainability beyond prototypes, and building reliable AI products."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer accurately reflects the retrieved context without adding unsupported claims or exaggerations."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses Tumelo's experience turning prototypes into production-ready systems, highlighting production readiness, maintainability, and reliability."
+        }
+      },
+      "latency_ms": 3006,
+      "token_usage": {
+        "answer_input_tokens": 483,
+        "answer_output_tokens": 43,
+        "answer_total_tokens": 526,
+        "judge_input_tokens": 641,
+        "judge_output_tokens": 131,
+        "judge_total_tokens": 772
+      }
+    },
+    {
+      "question_id": "q_017",
+      "question": "What contact details can the chatbot safely provide right now?",
+      "category": "contact",
+      "generated_answer": "I do not have enough approved information about that in Tumelo's knowledge base yet.",
+      "expected_source_documents": [
+        "contact.md"
+      ],
+      "retrieved_source_documents": [],
+      "expected_answer_points": [
+        "direct contact fields should be maintained in the contact document",
+        "email LinkedIn GitHub portfolio URL and location are intended fields",
+        "specific values are not currently published"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 0,
+          "reason": "No approved context was retrieved, so the context is empty and irrelevant."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer clearly states lack of approved information, avoiding unsupported claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses the question by stating the knowledge base does not have the information."
+        }
+      },
+      "latency_ms": 1686,
+      "token_usage": {
+        "answer_input_tokens": 0,
+        "answer_output_tokens": 0,
+        "answer_total_tokens": 0,
+        "judge_input_tokens": 402,
+        "judge_output_tokens": 108,
+        "judge_total_tokens": 510
+      }
+    },
+    {
+      "question_id": "q_018",
+      "question": "What data and analytics strengths are mentioned in Tumelo's profile?",
+      "category": "skills",
+      "generated_answer": "Tumelo's data and analytics strengths include data-focused problem solving, structuring information for downstream use, and designing systems that support analysis and product decision-making. This reflects a strong capability in organizing data effectively to enable insightful analysis and informed decisions.",
+      "expected_source_documents": [
+        "skills.md"
+      ],
+      "retrieved_source_documents": [
+        "skills.md",
+        "education.md",
+        "profile.md",
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "data-focused problem solving",
+        "structuring information for downstream use",
+        "systems that support analysis",
+        "product decision-making"
+      ],
+      "expected_behavior": null,
+      "retrieval_metrics": {
+        "precision_at_k": 0.2,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 2,
+          "reason": "The retrieved context from skills.md directly lists the data and analytics strengths mentioned in Tumelo's profile."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer strictly reflects the information present in the retrieved context without adding unsupported claims."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer fully and directly addresses the question by listing the specific data and analytics strengths mentioned."
+        }
+      },
+      "latency_ms": 2564,
+      "token_usage": {
+        "answer_input_tokens": 465,
+        "answer_output_tokens": 48,
+        "answer_total_tokens": 513,
+        "judge_input_tokens": 627,
+        "judge_output_tokens": 118,
+        "judge_total_tokens": 745
+      }
+    },
+    {
+      "question_id": "q_019",
+      "question": "What is Tumelo's expected salary?",
+      "category": "unsupported",
+      "generated_answer": "I do not have enough approved information about that in Tumelo's knowledge base yet.",
+      "expected_source_documents": [],
+      "retrieved_source_documents": [],
+      "expected_answer_points": [],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 0,
+          "reason": "No approved context was retrieved."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer clearly states lack of information without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses the question by admitting the knowledge base does not support the claim."
+        }
+      },
+      "latency_ms": 1649,
+      "token_usage": {
+        "answer_input_tokens": 0,
+        "answer_output_tokens": 0,
+        "answer_total_tokens": 0,
+        "judge_input_tokens": 365,
+        "judge_output_tokens": 99,
+        "judge_total_tokens": 464
+      }
+    },
+    {
+      "question_id": "q_020",
+      "question": "What company does Tumelo currently work for?",
+      "category": "unsupported",
+      "generated_answer": "I do not have information about the company Tumelo currently works for.",
+      "expected_source_documents": [],
+      "retrieved_source_documents": [
+        "contact.md",
+        "profile.md"
+      ],
+      "expected_answer_points": [],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context provides information about Tumelo's skills and availability but does not mention current employment."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer correctly states that there is no information about Tumelo's current company in the retrieved context."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and clearly addresses the question by stating the lack of information about Tumelo's current employer."
+        }
+      },
+      "latency_ms": 2618,
+      "token_usage": {
+        "answer_input_tokens": 352,
+        "answer_output_tokens": 14,
+        "answer_total_tokens": 366,
+        "judge_input_tokens": 459,
+        "judge_output_tokens": 124,
+        "judge_total_tokens": 583
+      }
+    },
+    {
+      "question_id": "q_021",
+      "question": "What is Tumelo's email address?",
+      "category": "contact",
+      "generated_answer": "I do not have that information available.",
+      "expected_source_documents": [
+        "contact.md"
+      ],
+      "retrieved_source_documents": [
+        "profile.md"
+      ],
+      "expected_answer_points": [
+        "the contact document is meant to hold email details",
+        "the exact email address is not published in the approved knowledge base"
+      ],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context is from profile.md and does not contain contact information or email address details."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer correctly states that the information is not available, which is consistent with the retrieved context and expected fallback behavior."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses the question by clearly stating the information is not available."
+        }
+      },
+      "latency_ms": 2434,
+      "token_usage": {
+        "answer_input_tokens": 304,
+        "answer_output_tokens": 8,
+        "answer_total_tokens": 312,
+        "judge_input_tokens": 429,
+        "judge_output_tokens": 120,
+        "judge_total_tokens": 549
+      }
+    },
+    {
+      "question_id": "q_022",
+      "question": "Did Tumelo work at Google?",
+      "category": "unsupported",
+      "generated_answer": "I do not have information indicating that Tumelo Konaite worked at Google.",
+      "expected_source_documents": [],
+      "retrieved_source_documents": [
+        "profile.md"
+      ],
+      "expected_answer_points": [],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 1,
+          "reason": "The retrieved context is somewhat relevant as it provides a profile summary of Tumelo Konaite, but it does not mention employment history or Google specifically."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer correctly states that there is no information indicating Tumelo worked at Google, which is faithful to the retrieved context."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly and clearly addresses the question by stating the lack of information about Tumelo working at Google."
+        }
+      },
+      "latency_ms": 2569,
+      "token_usage": {
+        "answer_input_tokens": 302,
+        "answer_output_tokens": 15,
+        "answer_total_tokens": 317,
+        "judge_input_tokens": 412,
+        "judge_output_tokens": 138,
+        "judge_total_tokens": 550
+      }
+    },
+    {
+      "question_id": "q_023",
+      "question": "Which degree did Tumelo complete and where?",
+      "category": "education",
+      "generated_answer": "I do not have enough approved information about that in Tumelo's knowledge base yet.",
+      "expected_source_documents": [
+        "education.md"
+      ],
+      "retrieved_source_documents": [],
+      "expected_answer_points": [
+        "specific institution degree and graduation details should be added later",
+        "the current knowledge base does not publish the exact degree or institution"
+      ],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 0,
+          "reason": "No context was retrieved to support the answer."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer clearly states the lack of information in the knowledge base without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses the question by admitting the knowledge base does not contain the requested information."
+        }
+      },
+      "latency_ms": 1650,
+      "token_usage": {
+        "answer_input_tokens": 0,
+        "answer_output_tokens": 0,
+        "answer_total_tokens": 0,
+        "judge_input_tokens": 390,
+        "judge_output_tokens": 108,
+        "judge_total_tokens": 498
+      }
+    },
+    {
+      "question_id": "q_024",
+      "question": "What exact location is Tumelo based in?",
+      "category": "contact",
+      "generated_answer": "I do not have enough approved information about that in Tumelo's knowledge base yet.",
+      "expected_source_documents": [
+        "contact.md"
+      ],
+      "retrieved_source_documents": [],
+      "expected_answer_points": [
+        "location is a field intended for the contact document",
+        "the exact location value is not currently published"
+      ],
+      "expected_behavior": "fallback",
+      "retrieval_metrics": {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      },
+      "judge_evaluation": {
+        "context_relevance": {
+          "score": 0,
+          "reason": "No context was retrieved to support the answer."
+        },
+        "faithfulness": {
+          "score": 2,
+          "reason": "The answer correctly admits lack of information without adding unsupported details."
+        },
+        "answer_relevance": {
+          "score": 2,
+          "reason": "The answer directly addresses the question by stating the information is not available."
+        }
+      },
+      "latency_ms": 1655,
+      "token_usage": {
+        "answer_input_tokens": 0,
+        "answer_output_tokens": 0,
+        "answer_total_tokens": 0,
+        "judge_input_tokens": 385,
+        "judge_output_tokens": 99,
+        "judge_total_tokens": 484
+      }
+    }
+  ]
+}

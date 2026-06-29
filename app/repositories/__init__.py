@@ -1,6 +1,8 @@
 __all__ = [
     "ConversationRepository",
     "ConversationRepositoryError",
+    "EvalRepository",
+    "EvalRepositoryError",
     "KnowledgeRepository",
     "KnowledgeRepositoryError",
 ]
@@ -28,6 +30,15 @@ def __getattr__(name: str):
         exports = {
             "KnowledgeRepository": KnowledgeRepository,
             "KnowledgeRepositoryError": KnowledgeRepositoryError,
+        }
+        return exports[name]
+
+    if name in {"EvalRepository", "EvalRepositoryError"}:
+        from app.repositories.eval_repository import EvalRepository, EvalRepositoryError
+
+        exports = {
+            "EvalRepository": EvalRepository,
+            "EvalRepositoryError": EvalRepositoryError,
         }
         return exports[name]
 
