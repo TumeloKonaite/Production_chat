@@ -32,10 +32,12 @@ class LLMService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._model_registry = ModelRegistry(
-            default_model_config_id=settings.default_model_config_id
+            default_model_config_id=settings.default_model_config_id,
+            model_configs_json=settings.model_configs_json,
         )
         self._clients = {
-            "openai": OpenAIClient(settings=settings),
+            "openai": OpenAIClient.from_settings(settings, provider="openai"),
+            "openrouter": OpenAIClient.from_settings(settings, provider="openrouter"),
         }
 
     @property

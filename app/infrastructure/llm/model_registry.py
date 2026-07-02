@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.infrastructure.llm.base import TokenUsage
-from app.infrastructure.llm.model_config import MODEL_CONFIGS, ModelConfig
+from app.infrastructure.llm.model_config import ModelConfig, load_model_configs
 
 
 class UnknownModelError(ValueError):
@@ -17,9 +17,14 @@ class ModelRegistry:
         self,
         *,
         model_configs: dict[str, ModelConfig] | None = None,
+        model_configs_json: str | None = None,
         default_model_config_id: str,
     ) -> None:
-        self._model_configs = dict(model_configs or MODEL_CONFIGS)
+        self._model_configs = (
+            dict(model_configs)
+            if model_configs is not None
+            else load_model_configs(model_configs_json)
+        )
         self._default_model_config_id = default_model_config_id
         self.get_model(default_model_config_id)
 

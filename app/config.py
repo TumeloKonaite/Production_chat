@@ -8,11 +8,17 @@ from app.infrastructure.prompts import normalize_prompt_version
 # Load local development settings from `.env` without requiring callers to do it first.
 load_dotenv()
 
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
     openai_api_key: str | None
+    openai_base_url: str
+    openrouter_api_key: str | None
+    openrouter_base_url: str
     tavus_api_key: str | None
     tavus_base_url: str
     tavus_face_id: str | None
@@ -21,6 +27,7 @@ class Settings:
     tavus_tool_secret: str | None
     ingestion_api_secret: str | None
     default_model_config_id: str
+    model_configs_json: str | None
     knowledge_embedding_model: str
     knowledge_collection_name: str
     default_prompt_version: str
@@ -43,6 +50,14 @@ def _parse_bool(value: str | None, *, default: bool) -> bool:
     return value.strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _get_non_empty_env(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return default
+
+
 @lru_cache
 def get_settings() -> Settings:
     # Cache config so dependency injection reuses the same resolved settings object.
@@ -59,6 +74,15 @@ def get_settings() -> Settings:
             "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot",
         ),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openai_base_url=(
+            _get_non_empty_env("OPENAI_BASE_URL", "LLM_BASE_URL", default=DEFAULT_OPENAI_BASE_URL)
+            or DEFAULT_OPENAI_BASE_URL
+        ).rstrip("/"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+        openrouter_base_url=(
+            _get_non_empty_env("OPENROUTER_BASE_URL", default=DEFAULT_OPENROUTER_BASE_URL)
+            or DEFAULT_OPENROUTER_BASE_URL
+        ).rstrip("/"),
         tavus_api_key=os.getenv("TAVUS_API_KEY"),
         tavus_base_url=os.getenv("TAVUS_BASE_URL", "https://tavusapi.com"),
         tavus_face_id=os.getenv("TAVUS_FACE_ID"),
@@ -67,6 +91,7 @@ def get_settings() -> Settings:
         tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         default_model_config_id=configured_model or "openai:gpt-4.1-mini",
+        model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
         knowledge_embedding_model=os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
         knowledge_collection_name=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),
         default_prompt_version=normalize_prompt_version(

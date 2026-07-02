@@ -93,6 +93,9 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
 OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 TAVUS_API_KEY=
 TAVUS_BASE_URL=https://tavusapi.com
 TAVUS_FACE_ID=
@@ -101,7 +104,7 @@ PUBLIC_BACKEND_URL=
 TAVUS_TOOL_SECRET=
 INGESTION_API_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
-OPENAI_MODEL=gpt-4.1-mini
+MODEL_CONFIGS_JSON=
 DEFAULT_PROMPT_VERSION=v1_professional
 CONVERSATION_HISTORY_LIMIT=10
 RETRIEVAL_TOP_K=5
@@ -115,6 +118,8 @@ DAGSHUB_REPO_OWNER=
 DAGSHUB_REPO_NAME=
 DAGSHUB_TOKEN=
 ```
+
+`OPENAI_MODEL` is still supported as a legacy fallback, but `DEFAULT_MODEL_CONFIG_ID` is the preferred way to select the runtime model.
 
 ## Local setup
 
@@ -365,6 +370,70 @@ The app follows this MVP flow:
 Runtime prompt selection still loads versioned templates from `app/infrastructure/prompts/templates`.
 If `prompt_version` is omitted in the API request, the backend falls back to `DEFAULT_PROMPT_VERSION`.
 If `model_config_id` is omitted, the backend falls back to `DEFAULT_MODEL_CONFIG_ID`.
+
+### OpenAI and OpenRouter provider configuration
+
+The backend uses one OpenAI-compatible transport implementation, but it can keep separate provider credentials and base URLs loaded at the same time.
+That means one running backend can send:
+
+- `provider: "openai"` model configs to OpenAI directly
+- `provider: "openrouter"` model configs to OpenRouter
+
+Base environment variables:
+
+```env
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENROUTER_API_KEY=<openrouter-api-key>
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
+```
+
+The built-in model configs use `provider: "openai"` and continue to call OpenAI directly by default.
+To evaluate OpenRouter-backed models in the same backend, add model configs with `provider: "openrouter"`:
+
+```env
+DEFAULT_MODEL_CONFIG_ID=openrouter:anthropic/claude-3.5-sonnet
+MODEL_CONFIGS_JSON=[
+  {
+    "config_id": "openrouter:anthropic/claude-3.5-sonnet",
+    "provider": "openrouter",
+    "model": "anthropic/claude-3.5-sonnet",
+    "input_cost_per_1m_tokens": 3.0,
+    "output_cost_per_1m_tokens": 15.0
+  }
+]
+```
+
+`LLM_BASE_URL` is still accepted as a fallback alias for `OPENAI_BASE_URL`, but only for the OpenAI provider path. OpenRouter uses `OPENROUTER_BASE_URL`.
+
+### Adding custom model configs
+
+Built-in OpenAI model configs continue to work without extra setup.
+For experiments, add extra model configs through `MODEL_CONFIGS_JSON` as a JSON array. The `provider` field must be either `openai` or `openrouter`:
+
+```env
+MODEL_CONFIGS_JSON=[
+  {
+    "config_id": "openrouter:anthropic/claude-3.5-sonnet",
+    "provider": "openrouter",
+    "model": "anthropic/claude-3.5-sonnet",
+    "input_cost_per_1m_tokens": 3.0,
+    "output_cost_per_1m_tokens": 15.0
+  },
+  {
+    "config_id": "openrouter:openai/gpt-4.1-mini",
+    "provider": "openrouter",
+    "model": "openai/gpt-4.1-mini",
+    "input_cost_per_1m_tokens": 0.0,
+    "output_cost_per_1m_tokens": 0.0
+  }
+]
+```
+
+Set `DEFAULT_MODEL_CONFIG_ID` to one of those custom IDs, or pass a custom `model_config_id` per request or eval run.
+This makes it possible to compare direct OpenAI models and OpenRouter-backed models without restarting the app to swap API keys.
+If a model config ID is unknown, the backend fails with a clear validation error listing available IDs.
 
 ### Local-only MLflow tracking
 
