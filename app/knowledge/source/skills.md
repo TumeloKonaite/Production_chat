@@ -1,17 +1,94 @@
 # Skills
 
-## AI Application Development
+## Core Specialties
 
-Tumelo works on practical AI applications involving LLM integration, prompt grounding, retrieval preparation, and chatbot product design.
+- Data Science and Analytics
+- Machine Learning and Statistical Modelling
+- Artificial Intelligence and Generative AI
+- Retrieval-Augmented Generation (RAG)
+- Agentic AI Systems
+- Backend Software Engineering
+- Cloud-Native AI Architecture
+- Production ML Systems
+- API Platform Development
+- Quantitative Finance
+
+## Programming Languages
+
+- Python
+- SQL
+- Bash
+- JavaScript
 
 ## Backend Engineering
 
-Key backend strengths include FastAPI service design, SQLAlchemy data modeling, API schema definition, dependency management, and persistence-layer design.
+- FastAPI
+- Flask
+- SQLAlchemy
+- Pydantic
+- API development
+- Backend service design
 
-## Data and Analytics
+## Frontend
 
-Tumelo's background includes data-focused problem solving, structuring information for downstream use, and designing systems that support analysis and product decision-making.
+- React
+- Vite
+- HTML
+- CSS
 
-## Product Delivery
+## Databases and Storage
 
-A consistent skill is translating technical requirements into working software with clear scope, staged delivery, and a path from prototype to production.
+- PostgreSQL
+- MySQL
+- DynamoDB
+- Redis
+- Amazon S3
+- MinIO
+
+## Vector Databases and Retrieval
+
+- Chroma
+- PostgreSQL/pgvector
+- Embeddings
+- RAG
+- LLM evaluation
+
+## Data Science and Machine Learning
+
+- Pandas
+- NumPy
+- scikit-learn
+- Hugging Face Transformers
+- Model evaluation
+- Predictive analytics
+
+## AI Engineering
+
+- LLM APIs
+- Prompt engineering
+- Agentic AI
+- SOAP note drafting workflows
+- Full-stack AI product development
+
+## Testing and Quality Engineering
+
+- pytest
+- Unit testing
+- Integration testing
+- System testing
+
+## Cloud and DevOps
+
+- AWS
+- GCP
+- Cloud Run
+- Firebase Hosting
+- Docker
+- Terraform
+- Linux
+- GitHub Actions
+
+## Identity and Access
+
+- Firebase Auth
+- Keycloak

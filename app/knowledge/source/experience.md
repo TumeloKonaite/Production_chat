@@ -1,13 +1,46 @@
 # Experience
 
-## AI Systems Builder
+## Confirmed Experience Summary
 
-Tumelo has experience building AI-powered applications that combine language models, structured content, and backend services. The emphasis is on usefulness, reliability, and maintainability rather than novelty alone.
+Tumelo has 6 years of experience building data-driven products, machine
+learning solutions, backend systems, and production-grade AI applications.
+The imported sources confirm hands-on work across data science, machine
+learning, backend software engineering, analytics, cloud computing, and
+applied AI product development.
 
-## Software Engineering
+## Zeno-Associated Product Work
 
-Tumelo develops service-oriented Python applications with a focus on API behavior, data storage, and clean internal boundaries between transport, business logic, and persistence.
+### LetsGo South Africa - AI-Powered Tourism Platform
 
-## Knowledge and Retrieval Work
+- Period: Apr 2026 to Present
+- Association explicitly named in imported data: Zeno
+- Scope: Built a full-stack tourism platform that allows admins to create,
+  manage, and publish travel packages while customers browse packages, submit
+  enquiries, and use an AI travel assistant.
+- Delivery areas: FastAPI backend, PostgreSQL database, React/Vite frontend,
+  authentication, image handling, enquiry workflows, and cloud deployment.
 
-Recent work includes preparing personal and project information as structured source material that can later support search, retrieval, evaluation, and grounded chatbot responses.
+## Engineering Experience Themes
+
+- Building production-grade RAG systems and agentic AI applications
+- Designing backend APIs and service orchestration layers
+- Creating cloud-native applications and deployment workflows
+- Developing predictive analytics and machine learning solutions
+- Building end-to-end AI products from data handling through production
+  operations
+- Structuring AI systems around maintainability, reliability, and business
+  value
+
+## Academic and Analytical Foundation
+
+Tumelo holds an MSc in Computational and Applied Mathematics from the
+University of the Witwatersrand, with specialization in quantitative finance,
+interest rate derivatives, LIBOR transition, and OIS benchmark modelling.
+This supports the analytical style reflected across his AI and software work.
+
+## Ground-Truth Boundaries
+
+The imported TXT and JSON sources do not provide a fully confirmed
+employer-by-employer chronology beyond the Zeno project association above.
+Huawei experience and University of the Witwatersrand tutoring experience are
+not added here because they are not confirmed in the imported source files.

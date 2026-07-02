@@ -1,13 +1,20 @@
 # Contact
 
-## Availability
+## Publicly Confirmed Details
 
-Tumelo is open to conversations about AI products, backend engineering, data-driven systems, and applied LLM work.
+- Name: Tumelo Tshana Konaite
+- Preferred name: Tumelo
+- Location: Gauteng, South Africa
 
-## Contact Details
+## Public Project Websites
 
-Direct contact fields such as email address, LinkedIn profile, GitHub profile, portfolio URL, and location should be maintained in this document so they can be updated and re-ingested without changing application code.
+- LetsGo South Africa: https://letsgodb.web.app/
+- BeautyVerse: https://beautyverse.co.za/
+- MedDesk: https://meddesk.co.za/
 
-## Collaboration
+## Ground-Truth Boundaries
 
-The best opportunities usually involve practical product work, clear ownership, and systems that need to move from prototype to dependable delivery.
+The imported source files do not confirm a public email address, phone number,
+LinkedIn URL, GitHub URL, or direct booking link. Those details are
+intentionally omitted from the canonical knowledge base until they are provided
+as approved public contact information.

@@ -1,13 +1,16 @@
 # Education
 
-## Learning Profile
+## MSc in Computational and Applied Mathematics
 
-Tumelo's profile reflects strong applied learning across software engineering, AI systems, and data work.
+- Institution: University of the Witwatersrand
+- Year: 2024
+- Focus areas:
+  - Interest Rate Derivatives
+  - LIBOR Transition
+  - OIS Benchmark Modelling
+  - Quantitative Finance
 
-## Areas of Study
+## BSc Honours in Mathematical Sciences
 
-Relevant study areas include data science, machine learning, backend engineering, system design, and practical product development.
-
-## Notes
-
-Specific institution, degree, and graduation details should be added here when they are ready to be published in the portfolio knowledge base.
+- Institution: University of the Witwatersrand
+- Year: 2019
