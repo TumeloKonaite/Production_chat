@@ -126,7 +126,9 @@ async def main() -> None:
             "name": settings.default_retrieval_config,
             "top_k": args.top_k,
             "min_similarity": settings.retrieval_min_similarity,
+            "embedding_provider": settings.embedding_provider,
             "embedding_model": settings.knowledge_embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
             "collection_name": settings.knowledge_collection_name,
         }
 
@@ -177,7 +179,9 @@ async def main() -> None:
                         "temperature": args.temperature,
                         "top_k": args.top_k,
                         "min_similarity": settings.retrieval_min_similarity,
+                        "embedding_provider": settings.embedding_provider,
                         "embedding_model": settings.knowledge_embedding_model,
+                        "embedding_dimension": settings.embedding_dimension,
                         "knowledge_collection_name": settings.knowledge_collection_name,
                         "persisted_to_db": not args.no_db,
                     }

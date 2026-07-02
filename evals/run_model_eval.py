@@ -142,7 +142,9 @@ async def main() -> None:
                     "eval_dataset_version": args.dataset_version,
                     "temperature": args.temperature,
                     "top_k": retrieval_top_k,
+                    "embedding_provider": settings.embedding_provider,
                     "embedding_model": settings.knowledge_embedding_model,
+                    "embedding_dimension": settings.embedding_dimension,
                     "judge_model": None,
                 }
             )
