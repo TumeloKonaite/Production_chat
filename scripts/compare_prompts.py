@@ -10,19 +10,13 @@ import re
 from statistics import mean
 import sys
 
-try:
-    import mlflow
-except ImportError as exc:  # pragma: no cover - exercised only when the optional tool is missing
-    raise SystemExit(
-        "MLflow is required for prompt comparisons. Install project dependencies first."
-    ) from exc
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import get_settings
 from app.infrastructure.prompts import PromptLoader
+from app.infrastructure.tracking import create_experiment_tracker
 from app.services.chat.prompting import (
     build_chat_system_prompt,
     build_direct_fallback_text,
@@ -126,6 +120,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Override the retrieval top-k used during evaluation.",
+    )
+    parser.add_argument(
+        "--experiment-name",
+        default=None,
+        help="Override the MLflow experiment name used for prompt comparisons.",
     )
     return parser.parse_args()
 
@@ -377,10 +376,8 @@ async def main() -> None:
     prompt_versions = args.prompt_versions or prompt_loader.available_versions()
     questions = load_dataset(args.dataset)
     retrieval_top_k = args.retrieval_top_k or settings.retrieval_top_k
-
-    if settings.mlflow_tracking_uri:
-        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-    mlflow.set_experiment(settings.mlflow_experiment_name)
+    experiment_name = args.experiment_name or settings.mlflow_experiment_name
+    tracker = create_experiment_tracker(settings, experiment_name)
 
     retrieval_service = RetrievalService(settings=settings)
     llm_service = LLMService(settings=settings)
@@ -416,8 +413,8 @@ async def main() -> None:
             retrieval_top_k=retrieval_top_k,
         )
 
-        with mlflow.start_run(run_name=prompt_version):
-            mlflow.log_params(
+        with tracker.run(prompt_version):
+            tracker.log_params(
                 {
                     "prompt_version": prompt_version,
                     "model": llm_service.model,
@@ -426,10 +423,9 @@ async def main() -> None:
                     "eval_dataset": str(args.dataset),
                 }
             )
-            for metric_name, metric_value in metrics.items():
-                mlflow.log_metric(metric_name, metric_value)
-            mlflow.log_artifact(str(responses_path))
-            mlflow.log_artifact(str(summary_path))
+            tracker.log_metrics(metrics)
+            tracker.log_artifact(responses_path)
+            tracker.log_artifact(summary_path)
 
         print(
             f"{prompt_version}: groundedness={metrics['avg_groundedness_score']:.3f}, "

@@ -1,6 +1,6 @@
 # Production Chatbot
 
-Simple FastAPI backend for a personal website chatbot. The frontend sends a message to `POST /chat`, the backend calls the configured LLM with a server-side API key, stores production chat metadata in PostgreSQL, and can run offline model comparisons with MLflow-backed eval artifacts.
+Simple FastAPI backend for a personal website chatbot. The frontend sends a message to `POST /chat`, the backend calls the configured LLM with a server-side API key, stores production chat metadata in PostgreSQL, and can run evaluation workflows with local or remote MLflow-backed tracking.
 
 ## Project structure
 
@@ -38,6 +38,7 @@ app/
     tracking/
       experiment_tracker.py
       mlflow_client.py
+      setup.py
   repositories/
     chat_repository.py
     db/
@@ -107,8 +108,12 @@ RETRIEVAL_TOP_K=5
 RETRIEVAL_MIN_SIMILARITY=0.55
 DEFAULT_RETRIEVAL_CONFIG=default
 ENABLE_MLFLOW_TRACKING=false
-MLFLOW_TRACKING_URI=http://localhost:5000
+MLFLOW_TRACKING_URI=
 MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
+ENABLE_DAGSHUB_TRACKING=false
+DAGSHUB_REPO_OWNER=
+DAGSHUB_REPO_NAME=
+DAGSHUB_TOKEN=
 ```
 
 ## Local setup
@@ -361,10 +366,55 @@ Runtime prompt selection still loads versioned templates from `app/infrastructur
 If `prompt_version` is omitted in the API request, the backend falls back to `DEFAULT_PROMPT_VERSION`.
 If `model_config_id` is omitted, the backend falls back to `DEFAULT_MODEL_CONFIG_ID`.
 
-Run the model comparison workflow:
+### Local-only MLflow tracking
+
+Set:
+
+```env
+ENABLE_MLFLOW_TRACKING=true
+ENABLE_DAGSHUB_TRACKING=false
+MLFLOW_TRACKING_URI=
+MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
+```
+
+When `MLFLOW_TRACKING_URI` is blank, MLflow uses the local file-backed store and writes run metadata under `mlruns/` and artifacts under `mlartifacts/`.
+Those directories are local-only outputs and are gitignored.
+
+If you prefer a local MLflow server and UI instead of the default file-backed store, start one first:
 
 ```bash
 mlflow server --host 0.0.0.0 --port 5000
+```
+
+Then point the eval runners at it:
+
+```env
+MLFLOW_TRACKING_URI=http://localhost:5000
+```
+
+### DagsHub-backed remote tracking
+
+Set:
+
+```env
+ENABLE_MLFLOW_TRACKING=true
+ENABLE_DAGSHUB_TRACKING=true
+DAGSHUB_REPO_OWNER=<your-dagshub-owner>
+DAGSHUB_REPO_NAME=<your-dagshub-repo>
+DAGSHUB_TOKEN=<your-dagshub-token>
+MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
+```
+
+The tracking helper initializes DagsHub before selecting the MLflow experiment, so the existing MLflow logging code continues to log params, metrics, and artifacts to the remote DagsHub-backed MLflow backend.
+Leave `MLFLOW_TRACKING_URI` blank when using DagsHub so the DagsHub client can configure the tracking backend.
+
+Authentication can be provided either with `DAGSHUB_TOKEN` in `.env` or with a prior `dagshub login` on the machine.
+
+### Running eval workflows
+
+The model comparison workflow:
+
+```bash
 python evals/run_model_eval.py \
   --models openai:gpt-4.1-mini openai:gpt-4.1 \
   --prompt-version v1_professional \
@@ -372,7 +422,26 @@ python evals/run_model_eval.py \
   --experiment-name personal-chatbot-model-comparison
 ```
 
-Artifacts are written under `evals/results/`. When `ENABLE_MLFLOW_TRACKING=true` and `MLFLOW_TRACKING_URI` is reachable, the runner logs one MLflow run per model plus JSON and summary artifacts.
+The RAG evaluation workflow:
+
+```bash
+python evals/run_rag_eval.py \
+  --model openai:gpt-4.1-mini \
+  --prompt-version v1_professional \
+  --run-name portfolio-rag-eval
+```
+
+The prompt comparison workflow:
+
+```bash
+python scripts/compare_prompts.py \
+  --prompt-version v1_professional \
+  --prompt-version v2_warm_conversational \
+  --experiment-name personal-chatbot-model-comparison
+```
+
+Artifacts are written under `evals/results/` and `evals/prompt_eval_results/`.
+When `ENABLE_MLFLOW_TRACKING=true`, the runners log one MLflow run per evaluated unit plus the generated JSON and summary artifacts.
 
 ## Tests
 

@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import os
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+from app.config import Settings
+from app.infrastructure.tracking import TrackingSetupError, create_experiment_tracker
+from app.infrastructure.tracking.mlflow_client import MLflowClient
+
+
+class FakeMLflow:
+    def __init__(self) -> None:
+        self.tracking_uri: str | None = None
+        self.experiment_name: str | None = None
+
+    def set_tracking_uri(self, tracking_uri: str) -> None:
+        self.tracking_uri = tracking_uri
+
+    def set_experiment(self, experiment_name: str) -> None:
+        self.experiment_name = experiment_name
+
+
+def build_test_settings(**overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "database_url": "sqlite:///unused-for-tests.db",
+        "openai_api_key": "test-key",
+        "tavus_api_key": "tavus-test-key",
+        "tavus_base_url": "https://tavus.example",
+        "tavus_face_id": "face_123",
+        "tavus_pal_id": "pal_123",
+        "public_backend_url": "https://backend.example",
+        "tavus_tool_secret": "tool-secret",
+        "ingestion_api_secret": "ingestion-secret",
+        "default_model_config_id": "openai:gpt-4.1-mini",
+        "knowledge_embedding_model": "all-MiniLM-L6-v2",
+        "knowledge_collection_name": "personal_knowledge_base",
+        "default_prompt_version": "v1_professional",
+        "conversation_history_limit": 10,
+        "retrieval_top_k": 5,
+        "retrieval_min_similarity": 0.55,
+        "default_retrieval_config": "default",
+        "enable_mlflow_tracking": True,
+        "mlflow_tracking_uri": "http://localhost:5000",
+        "mlflow_experiment_name": "personal-chatbot-model-comparison",
+        "enable_dagshub_tracking": False,
+        "dagshub_repo_owner": None,
+        "dagshub_repo_name": None,
+        "dagshub_token": None,
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_mlflow_client_uses_local_tracking_uri_when_dagshub_is_disabled() -> None:
+    fake_mlflow = FakeMLflow()
+    client = MLflowClient(
+        tracking_uri="http://localhost:5000",
+        enabled=True,
+    )
+    client._mlflow = fake_mlflow
+
+    configured = client.set_experiment("local-evals")
+
+    assert configured is True
+    assert fake_mlflow.tracking_uri == "http://localhost:5000"
+    assert fake_mlflow.experiment_name == "local-evals"
+
+
+def test_mlflow_client_initializes_dagshub_before_setting_experiment(monkeypatch) -> None:
+    fake_mlflow = FakeMLflow()
+    dagshub_calls: list[dict[str, object]] = []
+
+    def fake_init(**kwargs: object) -> None:
+        dagshub_calls.append(kwargs)
+
+    monkeypatch.delenv("DAGSHUB_USER_TOKEN", raising=False)
+    monkeypatch.setitem(sys.modules, "dagshub", SimpleNamespace(init=fake_init))
+
+    client = MLflowClient(
+        tracking_uri="http://localhost:5000",
+        enabled=True,
+        enable_dagshub_tracking=True,
+        dagshub_repo_owner="acme",
+        dagshub_repo_name="production-chatbot",
+        dagshub_token="dagshub-secret",
+    )
+    client._mlflow = fake_mlflow
+
+    configured = client.set_experiment("remote-evals")
+
+    assert configured is True
+    assert dagshub_calls == [
+        {
+            "repo_owner": "acme",
+            "repo_name": "production-chatbot",
+            "mlflow": True,
+        }
+    ]
+    assert fake_mlflow.tracking_uri is None
+    assert fake_mlflow.experiment_name == "remote-evals"
+    assert os.environ["DAGSHUB_USER_TOKEN"] == "dagshub-secret"
+
+
+def test_mlflow_client_raises_clear_error_when_dagshub_repo_owner_is_missing() -> None:
+    fake_mlflow = FakeMLflow()
+    client = MLflowClient(
+        tracking_uri=None,
+        enabled=True,
+        enable_dagshub_tracking=True,
+        dagshub_repo_owner=None,
+        dagshub_repo_name="production-chatbot",
+    )
+    client._mlflow = fake_mlflow
+
+    with pytest.raises(TrackingSetupError, match="DAGSHUB_REPO_OWNER"):
+        client.set_experiment("remote-evals")
+
+
+def test_create_experiment_tracker_rejects_dagshub_without_mlflow() -> None:
+    settings = build_test_settings(
+        enable_mlflow_tracking=False,
+        enable_dagshub_tracking=True,
+        dagshub_repo_owner="acme",
+        dagshub_repo_name="production-chatbot",
+    )
+
+    with pytest.raises(TrackingSetupError, match="ENABLE_MLFLOW_TRACKING=true"):
+        create_experiment_tracker(settings, "remote-evals")

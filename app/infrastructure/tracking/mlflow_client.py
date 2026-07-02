@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from app.infrastructure.tracking.setup import TrackingSetupError, configure_tracking_backend
+
 
 class MLflowClient:
     def __init__(
@@ -12,9 +14,17 @@ class MLflowClient:
         *,
         tracking_uri: str | None,
         enabled: bool,
+        enable_dagshub_tracking: bool = False,
+        dagshub_repo_owner: str | None = None,
+        dagshub_repo_name: str | None = None,
+        dagshub_token: str | None = None,
     ) -> None:
         self._tracking_uri = tracking_uri
         self._enabled = enabled
+        self._enable_dagshub_tracking = enable_dagshub_tracking
+        self._dagshub_repo_owner = dagshub_repo_owner
+        self._dagshub_repo_name = dagshub_repo_name
+        self._dagshub_token = dagshub_token
         self._mlflow: Any | None = None
 
     @property
@@ -30,10 +40,18 @@ class MLflowClient:
             return False
 
         try:
-            if self._tracking_uri:
-                mlflow.set_tracking_uri(self._tracking_uri)
+            configure_tracking_backend(
+                mlflow=mlflow,
+                tracking_uri=self._tracking_uri,
+                enable_dagshub_tracking=self._enable_dagshub_tracking,
+                dagshub_repo_owner=self._dagshub_repo_owner,
+                dagshub_repo_name=self._dagshub_repo_name,
+                dagshub_token=self._dagshub_token,
+            )
             mlflow.set_experiment(experiment_name)
             return True
+        except TrackingSetupError:
+            raise
         except Exception:
             self._enabled = False
             return False
