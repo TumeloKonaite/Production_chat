@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
+from app.api.knowledge import router as knowledge_router
 from app.api.tavus import router as tavus_router
 from app.infrastructure.llm import UnknownModelError
 from app.infrastructure.prompts import UnknownPromptVersionError
+from app.knowledge.ingestion import KnowledgeIngestionServiceError
 from app.services.chat import (
     ChatPersistenceError,
     ChatServiceError,
@@ -27,6 +29,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(chat_router)
+    app.include_router(knowledge_router)
     app.include_router(tavus_router)
 
     @app.get("/health", tags=["health"])
@@ -102,6 +105,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Tavus integration is not configured correctly."},
+        )
+
+    @app.exception_handler(KnowledgeIngestionServiceError)
+    async def handle_knowledge_ingestion_error(
+        _: Request,
+        __: KnowledgeIngestionServiceError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Unable to ingest knowledge. Please try again."},
         )
 
     @app.exception_handler(LLMServiceError)

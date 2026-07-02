@@ -19,6 +19,7 @@ class Settings:
     tavus_pal_id: str | None
     public_backend_url: str | None
     tavus_tool_secret: str | None
+    ingestion_api_secret: str | None
     default_model_config_id: str
     knowledge_embedding_model: str
     knowledge_collection_name: str
@@ -60,6 +61,7 @@ def get_settings() -> Settings:
         tavus_pal_id=os.getenv("TAVUS_PAL_ID"),
         public_backend_url=os.getenv("PUBLIC_BACKEND_URL"),
         tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
+        ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         default_model_config_id=configured_model or "openai:gpt-4.1-mini",
         knowledge_embedding_model=os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
         knowledge_collection_name=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),

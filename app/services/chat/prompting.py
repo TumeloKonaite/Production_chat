@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import re
 
 from app.services.retrieval import RetrievedChunk
 
@@ -30,6 +31,31 @@ PERSONAL_QUERY_MARKERS = {
     "degree",
     "certification",
     "location",
+}
+PROJECT_QUERY_MARKERS = {
+    "project",
+    "projects",
+}
+_PROJECT_QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_BROAD_PROJECT_STOPWORDS = {
+    "about",
+    "and",
+    "any",
+    "are",
+    "built",
+    "details",
+    "has",
+    "list",
+    "me",
+    "of",
+    "on",
+    "project",
+    "projects",
+    "tell",
+    "the",
+    "tumelo",
+    "what",
+    "which",
 }
 GENERAL_TECH_MARKERS = {
     "api",
@@ -63,6 +89,10 @@ def build_chat_system_prompt(
         "If the approved context does not contain enough Tumelo-specific information, say that you do not have that information available.",
         "If the user is asking a general technical question, you may answer generally, but do not present general knowledge as Tumelo's personal experience.",
     ]
+    if is_broad_project_query(message):
+        guidance.append(
+            "If the user is asking broadly about Tumelo's projects, summarize the most relevant projects from the approved project context with project names and concise descriptions before offering more detail."
+        )
     if not retrieved_chunks:
         guidance.append(
             "No relevant approved Tumelo context was retrieved for this turn, so avoid personal claims unless they are already established in the conversation."
@@ -114,6 +144,19 @@ def build_direct_fallback_text(message: str) -> str:
         return "I do not have enough approved information about that in Tumelo's knowledge base yet."
 
     return "Could you clarify whether you're asking about Tumelo's background or a general technical topic?"
+
+
+def is_broad_project_query(message: str) -> bool:
+    normalized_message = message.casefold()
+    if not any(marker in normalized_message for marker in PROJECT_QUERY_MARKERS):
+        return False
+
+    query_terms = [
+        token
+        for token in _PROJECT_QUERY_TOKEN_RE.findall(normalized_message)
+        if len(token) >= 3 and token not in _BROAD_PROJECT_STOPWORDS
+    ]
+    return len(query_terms) == 0
 
 
 def _message_prefers_direct_fallback(message: str) -> bool:
