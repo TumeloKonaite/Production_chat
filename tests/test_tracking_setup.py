@@ -27,6 +27,9 @@ def build_test_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "database_url": "sqlite:///unused-for-tests.db",
         "openai_api_key": "test-key",
+        "openai_base_url": "https://api.openai.com/v1",
+        "openrouter_api_key": "openrouter-test-key",
+        "openrouter_base_url": "https://openrouter.ai/api/v1",
         "tavus_api_key": "tavus-test-key",
         "tavus_base_url": "https://tavus.example",
         "tavus_face_id": "face_123",
@@ -35,6 +38,7 @@ def build_test_settings(**overrides: object) -> Settings:
         "tavus_tool_secret": "tool-secret",
         "ingestion_api_secret": "ingestion-secret",
         "default_model_config_id": "openai:gpt-4.1-mini",
+        "model_configs_json": None,
         "knowledge_embedding_model": "all-MiniLM-L6-v2",
         "knowledge_collection_name": "personal_knowledge_base",
         "default_prompt_version": "v1_professional",

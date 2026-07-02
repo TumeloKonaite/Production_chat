@@ -8,15 +8,46 @@ import httpx
 
 from app.config import Settings
 from app.infrastructure.llm.base import LLMChatMessage, LLMClient, LLMResponse
+from app.infrastructure.llm.text_normalization import normalize_llm_text
 from app.services.llm.errors import LLMConfigurationError, LLMServiceError
 
-OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_TIMEOUT_SECONDS = 60.0
 
 
 class OpenAIClient(LLMClient):
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(
+        self,
+        *,
+        api_key: str | None,
+        base_url: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._transport = transport
+
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Settings,
+        *,
+        provider: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> OpenAIClient:
+        if provider == "openai":
+            return cls(
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url,
+                transport=transport,
+            )
+        if provider == "openrouter":
+            return cls(
+                api_key=settings.openrouter_api_key,
+                base_url=settings.openrouter_base_url,
+                transport=transport,
+            )
+
+        raise LLMConfigurationError(f"Unsupported OpenAI-compatible provider: {provider}")
 
     async def generate(
         self,
@@ -58,7 +89,7 @@ class OpenAIClient(LLMClient):
         total_tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
 
         return LLMResponse(
-            content=assistant_response,
+            content=normalize_llm_text(assistant_response),
             model=response_model,
             input_tokens=prompt_tokens if isinstance(prompt_tokens, int) else None,
             output_tokens=completion_tokens if isinstance(completion_tokens, int) else None,
@@ -67,9 +98,9 @@ class OpenAIClient(LLMClient):
         )
 
     def _get_api_key(self) -> str:
-        if not self._settings.openai_api_key:
+        if not self._api_key:
             raise LLMConfigurationError()
-        return self._settings.openai_api_key
+        return self._api_key
 
     async def _request_completion(
         self,
@@ -79,8 +110,9 @@ class OpenAIClient(LLMClient):
     ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
-                base_url=OPENAI_BASE_URL,
+                base_url=self._base_url,
                 timeout=OPENAI_TIMEOUT_SECONDS,
+                transport=self._transport,
             ) as client:
                 response = await client.post("/chat/completions", headers=headers, json=payload)
                 if response.status_code >= 400:

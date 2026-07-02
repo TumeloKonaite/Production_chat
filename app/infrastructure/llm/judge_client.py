@@ -10,9 +10,8 @@ from app.config import Settings
 from app.domain.evals import JudgeEvaluation, JudgeMetricScore
 from app.infrastructure.llm.base import TokenUsage
 from app.infrastructure.llm.model_registry import ModelRegistry
-
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-OPENAI_TIMEOUT_SECONDS = 60.0
+from app.infrastructure.llm.openai_client import OpenAIClient
+from app.services.llm.errors import LLMConfigurationError, LLMServiceError
 
 
 class JudgeConfigurationError(Exception):
@@ -24,11 +23,28 @@ class JudgeClientError(Exception):
 
 
 class JudgeClient:
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._model_registry = ModelRegistry(
-            default_model_config_id=settings.default_model_config_id
+            default_model_config_id=settings.default_model_config_id,
+            model_configs_json=settings.model_configs_json,
         )
+        self._clients = {
+            "openai": OpenAIClient.from_settings(
+                settings,
+                provider="openai",
+                transport=transport,
+            ),
+            "openrouter": OpenAIClient.from_settings(
+                settings,
+                provider="openrouter",
+                transport=transport,
+            ),
+        }
 
     async def evaluate(
         self,
@@ -37,12 +53,11 @@ class JudgeClient:
         model_config_id: str | None = None,
     ) -> tuple[JudgeEvaluation, TokenUsage, int, str]:
         model_config = self._model_registry.resolve(model_config_id)
-        if model_config.provider != "openai":
+        client = self._clients.get(model_config.provider)
+        if client is None:
             raise JudgeConfigurationError(
                 f"Unsupported judge model provider: {model_config.provider}"
             )
-
-        api_key = self._get_api_key()
         payload = {
             "model": model_config.model,
             "temperature": 0,
@@ -60,13 +75,18 @@ class JudgeClient:
         }
 
         started_at = perf_counter()
-        response_payload = await self._request_completion(
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            payload=payload,
-        )
+        try:
+            response_payload = await client._request_completion(
+                headers={
+                    "Authorization": f"Bearer {client._get_api_key()}",
+                    "Content-Type": "application/json",
+                },
+                payload=payload,
+            )
+        except LLMConfigurationError as exc:
+            raise JudgeConfigurationError() from exc
+        except LLMServiceError as exc:
+            raise JudgeClientError() from exc
         latency_ms = int((perf_counter() - started_at) * 1000)
         response_text = self._extract_response_text(response_payload)
         if not response_text:
@@ -108,31 +128,6 @@ class JudgeClient:
             latency_ms,
             model_config.model,
         )
-
-    def _get_api_key(self) -> str:
-        if not self._settings.openai_api_key:
-            raise JudgeConfigurationError()
-        return self._settings.openai_api_key
-
-    async def _request_completion(
-        self,
-        *,
-        headers: dict[str, str],
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(
-                base_url=OPENAI_BASE_URL,
-                timeout=OPENAI_TIMEOUT_SECONDS,
-            ) as client:
-                response = await client.post("/chat/completions", headers=headers, json=payload)
-                if response.status_code >= 400:
-                    raise JudgeClientError()
-                return response.json()
-        except httpx.HTTPError as exc:
-            raise JudgeClientError() from exc
-        except ValueError as exc:
-            raise JudgeClientError() from exc
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         choices = payload.get("choices")
