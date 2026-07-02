@@ -16,6 +16,7 @@ from app.services.chat import (
     InvalidConversationIdError,
 )
 from app.services.llm import LLMConfigurationError, LLMServiceError
+from app.services.retrieval import EmbeddingConfigurationError, VectorIndexConfigurationError
 from app.services.tavus import TavusConfigurationError, TavusServiceError
 
 
@@ -95,6 +96,26 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Chat service is not configured correctly."},
+        )
+
+    @app.exception_handler(EmbeddingConfigurationError)
+    async def handle_embedding_configuration_error(
+        _: Request,
+        exc: EmbeddingConfigurationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(VectorIndexConfigurationError)
+    async def handle_vector_index_configuration_error(
+        _: Request,
+        exc: VectorIndexConfigurationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": str(exc)},
         )
 
     @app.exception_handler(TavusConfigurationError)

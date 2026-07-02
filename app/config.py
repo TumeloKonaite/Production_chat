@@ -30,7 +30,9 @@ class Settings:
     ingestion_api_secret: str | None
     default_model_config_id: str
     model_configs_json: str | None
+    embedding_provider: str
     knowledge_embedding_model: str
+    embedding_dimension: int
     knowledge_collection_name: str
     default_prompt_version: str
     conversation_history_limit: int
@@ -126,7 +128,11 @@ def get_settings() -> Settings:
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         default_model_config_id=configured_model or "openai:gpt-4.1-mini",
         model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
+        embedding_provider=(
+            _get_non_empty_env("EMBEDDING_PROVIDER", default="hf") or "hf"
+        ).strip().casefold(),
         knowledge_embedding_model=os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+        embedding_dimension=_get_int_env("EMBEDDING_DIMENSION", 384, minimum=1),
         knowledge_collection_name=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),
         knowledge_chunk_size=knowledge_chunk_size,
         knowledge_chunk_overlap=knowledge_chunk_overlap,

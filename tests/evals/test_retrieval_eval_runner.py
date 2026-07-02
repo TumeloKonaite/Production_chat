@@ -129,7 +129,9 @@ def test_build_run_config_captures_retrieval_settings() -> None:
         "Settings",
         (),
         {
+            "embedding_provider": "hf",
             "knowledge_embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
             "default_retrieval_config": "default",
             "retrieval_top_k": 5,
             "retrieval_min_similarity": 0.55,
@@ -148,7 +150,9 @@ def test_build_run_config_captures_retrieval_settings() -> None:
         argv=["evals/run_retrieval_eval.py", "--k", "5"],
     )
 
+    assert config["embedding_provider"] == "hf"
     assert config["embedding_model"] == "all-MiniLM-L6-v2"
+    assert config["embedding_dimension"] == 384
     assert config["vector_store_type"] == "pgvector"
     assert config["retrieval_strategy"] == "similarity_search_with_relevance_scores"
     assert config["chunk_size"] == 500

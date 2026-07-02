@@ -109,6 +109,9 @@ TAVUS_TOOL_SECRET=
 INGESTION_API_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 MODEL_CONFIGS_JSON=
+EMBEDDING_PROVIDER=hf
+KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
 CHUNK_SIZE=1000
 CHUNK_OVERLAP=200
 DEFAULT_PROMPT_VERSION=v1_professional
@@ -304,6 +307,16 @@ CHUNK_OVERLAP=200
 
 `CHUNK_SIZE` must be positive, `CHUNK_OVERLAP` must be zero or positive, and `CHUNK_OVERLAP` must be smaller than `CHUNK_SIZE`.
 
+Embedding configuration is also explicit:
+
+```env
+EMBEDDING_PROVIDER=hf
+KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+```
+
+If you change the embedding provider, model, or dimension, rebuild the knowledge index before running retrieval again. Retrieval now validates the stored index metadata and fails loudly when the active embedding config does not match the indexed config.
+
 ### Run ingestion from the CLI
 
 ```bash
@@ -424,6 +437,28 @@ MODEL_CONFIGS_JSON=[
 
 `LLM_BASE_URL` is still accepted as a fallback alias for `OPENAI_BASE_URL`, but only for the OpenAI provider path. OpenRouter uses `OPENROUTER_BASE_URL`.
 
+### Embedding provider configuration
+
+Retrieval defaults to the local Hugging Face embedding path:
+
+```env
+EMBEDDING_PROVIDER=hf
+KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+```
+
+OpenRouter-compatible embedding experiments can use:
+
+```env
+EMBEDDING_PROVIDER=openrouter
+KNOWLEDGE_EMBEDDING_MODEL=openai/text-embedding-3-small
+EMBEDDING_DIMENSION=1536
+OPENROUTER_API_KEY=<openrouter-api-key>
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+`EMBEDDING_DIMENSION` must match both the provider output and the pgvector storage dimension. If you change provider, model, or dimension, rebuild the knowledge index. If you change to a new vector dimension, you may also need a database migration before ingestion can succeed.
+
 ### Adding custom model configs
 
 Built-in OpenAI model configs continue to work without extra setup.
@@ -525,7 +560,7 @@ The retrieval-only baseline workflow:
 python evals/run_retrieval_eval.py --k 5
 ```
 
-The retrieval artifact payload includes the chunk size and overlap used for that run.
+The retrieval artifact payload includes the embedding provider, embedding model, embedding dimension, and chunking config used for that run.
 
 To compare multiple chunking strategies without editing code:
 
