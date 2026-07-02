@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.config import DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, DEFAULT_KNOWLEDGE_CHUNK_SIZE
 from app.knowledge.ingestion.errors import KnowledgeIngestionServiceError
 from app.knowledge.ingestion.ingest import ingest_knowledge
 from app.repositories.db.base import Base
@@ -32,9 +33,13 @@ class KnowledgeIngestionService:
         *,
         retrieval_service: RetrievalService,
         source_dir: Path | None = None,
+        chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+        chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
     ) -> None:
         self._retrieval_service = retrieval_service
         self._source_dir = source_dir
+        self._chunk_size = chunk_size
+        self._chunk_overlap = chunk_overlap
 
     def run(self, session: Session) -> KnowledgeIngestionRunResult:
         try:
@@ -42,6 +47,8 @@ class KnowledgeIngestionService:
                 session,
                 self._retrieval_service,
                 source_dir=self._source_dir,
+                chunk_size=self._chunk_size,
+                chunk_overlap=self._chunk_overlap,
             )
         except Exception as exc:
             raise KnowledgeIngestionServiceError() from exc

@@ -116,6 +116,7 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
 
     payload = json.loads(artifact_paths["results_json"].read_text(encoding="utf-8"))
     assert payload["summary"] == summary
+    assert payload["chunking"] == {"chunk_size": None, "chunk_overlap": None}
     assert payload["results"] == results
     csv_text = artifact_paths["results_csv"].read_text(encoding="utf-8")
     assert "retrieved_chunk_ids" in csv_text
@@ -133,6 +134,8 @@ def test_build_run_config_captures_retrieval_settings() -> None:
             "retrieval_top_k": 5,
             "retrieval_min_similarity": 0.55,
             "knowledge_collection_name": "personal_knowledge_base",
+            "knowledge_chunk_size": 500,
+            "knowledge_chunk_overlap": 100,
             "database_url": "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/test",
         },
     )()
@@ -148,7 +151,7 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["embedding_model"] == "all-MiniLM-L6-v2"
     assert config["vector_store_type"] == "pgvector"
     assert config["retrieval_strategy"] == "similarity_search_with_relevance_scores"
-    assert config["chunk_size"] == 1000
-    assert config["chunk_overlap"] == 200
+    assert config["chunk_size"] == 500
+    assert config["chunk_overlap"] == 100
     assert config["settings_used_by_retriever"]["retrieval_min_similarity"] == 0.55
     assert "run_retrieval_eval.py" in config["python_command_used"]

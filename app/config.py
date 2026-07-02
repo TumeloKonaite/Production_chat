@@ -10,6 +10,8 @@ load_dotenv()
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
+DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,8 @@ class Settings:
     dagshub_repo_owner: str | None
     dagshub_repo_name: str | None
     dagshub_token: str | None
+    knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
+    knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -58,6 +62,23 @@ def _get_non_empty_env(*names: str, default: str | None = None) -> str | None:
     return default
 
 
+def _get_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+
+    if minimum is not None and value < minimum:
+        comparator = "greater than 0" if minimum == 1 else f"greater than or equal to {minimum}"
+        raise ValueError(f"{name} must be {comparator}.")
+
+    return value
+
+
 @lru_cache
 def get_settings() -> Settings:
     # Cache config so dependency injection reuses the same resolved settings object.
@@ -67,6 +88,19 @@ def get_settings() -> Settings:
         configured_model = (
             f"openai:{openai_model}" if openai_model and ":" not in openai_model else openai_model
         )
+
+    knowledge_chunk_size = _get_int_env(
+        "CHUNK_SIZE",
+        DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+        minimum=1,
+    )
+    knowledge_chunk_overlap = _get_int_env(
+        "CHUNK_OVERLAP",
+        DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
+        minimum=0,
+    )
+    if knowledge_chunk_overlap >= knowledge_chunk_size:
+        raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
 
     return Settings(
         database_url=os.getenv(
@@ -94,6 +128,8 @@ def get_settings() -> Settings:
         model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
         knowledge_embedding_model=os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
         knowledge_collection_name=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),
+        knowledge_chunk_size=knowledge_chunk_size,
+        knowledge_chunk_overlap=knowledge_chunk_overlap,
         default_prompt_version=normalize_prompt_version(
             os.getenv(
                 "DEFAULT_PROMPT_VERSION",

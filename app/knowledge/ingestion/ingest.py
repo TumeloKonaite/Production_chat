@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.config import DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, DEFAULT_KNOWLEDGE_CHUNK_SIZE
 from app.knowledge.ingestion.chunker import chunk_markdown_document
 from app.knowledge.ingestion.cleaner import clean_markdown_text
 from app.knowledge.ingestion.loader import SourceDocument, load_source_documents
@@ -25,6 +26,8 @@ def ingest_knowledge(
     *,
     source_dir: Path | None = None,
     ingested_at: datetime | None = None,
+    chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
 ) -> tuple[list[SourceDocument], list[IngestionResult]]:
     repository = KnowledgeRepository(session)
     documents = load_source_documents(source_dir)
@@ -46,7 +49,11 @@ def ingest_knowledge(
 
         # Chunk the cleaned document, then replace any previously stored chunks
         # for that source so re-ingestion updates instead of duplicating rows.
-        chunks = chunk_markdown_document(cleaned_document)
+        chunks = chunk_markdown_document(
+            cleaned_document,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
         stored_chunks = repository.replace_source_chunks(
             source=document.source,
             chunks=chunks,

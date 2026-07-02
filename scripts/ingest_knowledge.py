@@ -14,15 +14,25 @@ from app.services.retrieval import RetrievalService
 
 
 def main() -> None:
+    settings = get_settings()
     engine = get_engine()
     prepare_knowledge_ingestion_storage(engine)
     session_factory = get_session_factory()
-    retrieval_service = RetrievalService(settings=get_settings())
-    ingestion_service = KnowledgeIngestionService(retrieval_service=retrieval_service)
+    retrieval_service = RetrievalService(settings=settings)
+    ingestion_service = KnowledgeIngestionService(
+        retrieval_service=retrieval_service,
+        chunk_size=settings.knowledge_chunk_size,
+        chunk_overlap=settings.knowledge_chunk_overlap,
+    )
 
     with session_factory() as session:
         result = ingestion_service.run(session)
 
+    print(
+        "Using chunk config: "
+        f"chunk_size={settings.knowledge_chunk_size}, "
+        f"chunk_overlap={settings.knowledge_chunk_overlap}"
+    )
     print(f"Loaded {result.documents_loaded} source documents")
     for document_result in result.results:
         print(f"Ingested {document_result.source}: {document_result.chunk_count} chunks")
