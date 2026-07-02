@@ -15,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from app.config import get_settings
 from app.infrastructure.llm import JudgeClient
 from app.infrastructure.prompts import PromptLoader
-from app.infrastructure.tracking import ExperimentTracker, MLflowClient
+from app.infrastructure.tracking import create_experiment_tracker
 from app.repositories import EvalRepository
 from app.repositories.db.session import get_session_factory
 from app.services.evals.rag_eval_service import RagEvalService
@@ -103,13 +103,7 @@ async def main() -> None:
     retrieval_service = RetrievalService(settings=settings)
     judge_client = JudgeClient(settings=settings)
     experiment_name = args.experiment_name or settings.mlflow_experiment_name
-    tracker = ExperimentTracker(
-        MLflowClient(
-            tracking_uri=settings.mlflow_tracking_uri,
-            enabled=settings.enable_mlflow_tracking,
-        ),
-        experiment_name=experiment_name,
-    )
+    tracker = create_experiment_tracker(settings, experiment_name)
 
     eval_repository = None
     session = None

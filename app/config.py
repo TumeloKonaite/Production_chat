@@ -31,6 +31,10 @@ class Settings:
     enable_mlflow_tracking: bool
     mlflow_tracking_uri: str | None
     mlflow_experiment_name: str
+    enable_dagshub_tracking: bool
+    dagshub_repo_owner: str | None
+    dagshub_repo_name: str | None
+    dagshub_token: str | None
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -84,4 +88,11 @@ def get_settings() -> Settings:
             "MLFLOW_EXPERIMENT_NAME",
             "personal-chatbot-model-comparison",
         ),
+        enable_dagshub_tracking=_parse_bool(
+            os.getenv("ENABLE_DAGSHUB_TRACKING"),
+            default=False,
+        ),
+        dagshub_repo_owner=os.getenv("DAGSHUB_REPO_OWNER"),
+        dagshub_repo_name=os.getenv("DAGSHUB_REPO_NAME"),
+        dagshub_token=os.getenv("DAGSHUB_TOKEN"),
     )

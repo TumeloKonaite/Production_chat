@@ -13,7 +13,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.config import get_settings
 from app.infrastructure.prompts import PromptLoader
-from app.infrastructure.tracking import ExperimentTracker, MLflowClient
+from app.infrastructure.tracking import create_experiment_tracker
 from app.services.evals.eval_service import (
     load_eval_dataset,
     records_as_json,
@@ -98,13 +98,7 @@ async def main() -> None:
     retrieval_top_k = args.retrieval_top_k or settings.retrieval_top_k
     retrieval_config = settings.default_retrieval_config
     experiment_name = args.experiment_name or settings.mlflow_experiment_name
-    tracker = ExperimentTracker(
-        MLflowClient(
-            tracking_uri=settings.mlflow_tracking_uri,
-            enabled=settings.enable_mlflow_tracking,
-        ),
-        experiment_name=experiment_name,
-    )
+    tracker = create_experiment_tracker(settings, experiment_name)
 
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     run_id = datetime.now(UTC).replace(microsecond=0).isoformat()

@@ -46,6 +46,10 @@ def build_test_settings() -> Settings:
         enable_mlflow_tracking=False,
         mlflow_tracking_uri=None,
         mlflow_experiment_name="personal-chatbot-model-comparison",
+        enable_dagshub_tracking=False,
+        dagshub_repo_owner=None,
+        dagshub_repo_name=None,
+        dagshub_token=None,
     )
 
 

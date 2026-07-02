@@ -12,6 +12,8 @@ wheels/
 .pytest_cache/
 .uv-cache/
 mlflow.db
+mlruns/
+mlartifacts/
 evals/prompt_eval_results/*
 !evals/prompt_eval_results/.gitkeep
 evals/results/*
