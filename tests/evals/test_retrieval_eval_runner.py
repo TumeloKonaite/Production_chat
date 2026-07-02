@@ -9,6 +9,7 @@ from evals.run_retrieval_eval import (
     build_run_config,
     create_output_directory,
     evaluate_examples,
+    evaluate_examples_for_k_values,
     write_artifacts,
 )
 
@@ -159,3 +160,46 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["chunk_overlap"] == 100
     assert config["settings_used_by_retriever"]["retrieval_min_similarity"] == 0.55
     assert "run_retrieval_eval.py" in config["python_command_used"]
+
+
+def test_evaluate_examples_for_k_values_reports_multi_k_summary() -> None:
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="question 1",
+            expected_source_documents=["projects.md"],
+        ),
+        RetrievalEvalExample(
+            id="q2",
+            question="question 2",
+            expected_source_documents=["skills.md"],
+        ),
+    ]
+    retrieval_service = FakeRetrievalService(
+        {
+            "question 1": [
+                build_chunk(chunk_id="projects.md::chunk-1", source="projects.md"),
+                build_chunk(chunk_id="contact.md::chunk-1", source="contact.md"),
+            ],
+            "question 2": [
+                build_chunk(chunk_id="contact.md::chunk-2", source="contact.md"),
+                build_chunk(chunk_id="skills.md::chunk-1", source="skills.md"),
+            ],
+        }
+    )
+
+    summary, results = evaluate_examples_for_k_values(
+        examples,
+        retrieval_service,
+        k_values=[5, 1, 3],
+    )
+
+    assert retrieval_service.calls == [("question 1", 5), ("question 2", 5)]
+    assert summary["k"] == 5
+    assert summary["k_values"] == [1, 3, 5]
+    assert summary["metrics_by_k"]["1"]["recall_at_k"] == 0.5
+    assert summary["metrics_by_k"]["3"]["recall_at_k"] == 1.0
+    assert summary["mrr"] == 0.75
+    assert results[0]["metrics_by_k"]["1"]["hit_at_k"] == 1.0
+    assert results[1]["metrics_by_k"]["1"]["hit_at_k"] == 0.0
+    assert results[1]["metrics_by_k"]["3"]["recall_at_k"] == 1.0
