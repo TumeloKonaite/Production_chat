@@ -39,6 +39,7 @@ def build_test_settings() -> Settings:
         tavus_pal_id="pal_123",
         public_backend_url="https://backend.example",
         tavus_tool_secret="tool-secret",
+        ingestion_api_secret="ingestion-secret",
         default_model_config_id="openai:gpt-4.1-mini",
         knowledge_embedding_model="all-MiniLM-L6-v2",
         knowledge_collection_name="personal_knowledge_base",

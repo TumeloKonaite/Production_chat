@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.knowledge.ingestion import (
+    KnowledgeIngestionService,
     chunk_markdown_document,
     clean_markdown_text,
     ingest_knowledge,
@@ -154,3 +155,25 @@ def test_ingest_knowledge_loads_and_persists_all_documents(tmp_path) -> None:
     assert all(isinstance(chunk, KnowledgeChunk) for chunk in stored_chunks)
     assert all(chunk.source_type == "markdown" for chunk in stored_chunks)
     assert len(retrieval_service.replaced_chunk_ids) == 2
+
+
+def test_knowledge_ingestion_service_returns_summary(tmp_path) -> None:
+    source_dir = tmp_path / "source"
+    write_source_file(source_dir, "profile.md", "# Profile\n\nTumelo builds AI products.\n")
+    write_source_file(source_dir, "projects.md", "# Projects\n\nTumelo builds grounded assistants.\n")
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+    ingestion_service = KnowledgeIngestionService(
+        retrieval_service=retrieval_service,
+        source_dir=source_dir,
+    )
+
+    with session_factory() as session:
+        result = ingestion_service.run(session)
+
+    assert result.status == "ok"
+    assert result.documents_loaded == 2
+    assert [(item.source, item.chunk_count) for item in result.results] == [
+        ("profile.md", 1),
+        ("projects.md", 1),
+    ]

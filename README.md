@@ -98,6 +98,7 @@ TAVUS_FACE_ID=
 TAVUS_PAL_ID=
 PUBLIC_BACKEND_URL=
 TAVUS_TOOL_SECRET=
+INGESTION_API_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 OPENAI_MODEL=gpt-4.1-mini
 DEFAULT_PROMPT_VERSION=v1_professional
@@ -239,6 +240,52 @@ Speak the backend response as the final answer.
 curl -X POST http://localhost:8000/api/tavus/conversations/end \
   -H "Content-Type: application/json" \
   -d '{"conversation_id":"tavus-conversation-id"}'
+```
+
+## Knowledge ingestion
+
+The markdown knowledge source of truth lives under `app/knowledge/source/`. Both the local CLI script and the protected admin API call the same backend ingestion service.
+
+### Run ingestion from the CLI
+
+```bash
+uv run python .\scripts\ingest_knowledge.py
+```
+
+### Trigger ingestion from the backend
+
+Set an ingestion secret in `.env`:
+
+```env
+INGESTION_API_SECRET=dev-secret-change-me
+```
+
+Run the backend:
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+Trigger the protected endpoint:
+
+```bash
+curl -X POST "http://localhost:8000/api/knowledge/ingest" \
+  -H "x-ingestion-secret: dev-secret-change-me"
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "documents_loaded": 9,
+  "results": [
+    {
+      "source": "profile.md",
+      "chunk_count": 3
+    }
+  ]
+}
 ```
 
 ### Frontend handoff

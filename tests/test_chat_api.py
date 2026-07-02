@@ -15,7 +15,7 @@ from app.config import Settings
 from app.infrastructure.llm import UnknownModelError
 from app.main import app
 from app.repositories.db.base import Base
-from app.repositories.models import Conversation, Message, RetrievalLog
+from app.repositories.models import Conversation, KnowledgeChunk, Message, RetrievalLog
 from app.services.llm import (
     LLMChatMessage,
     LLMGeneratedResponse,
@@ -161,6 +161,7 @@ def build_test_settings(*, default_prompt_version: str = "v1_professional") -> S
         tavus_pal_id="pal_123",
         public_backend_url="https://backend.example",
         tavus_tool_secret="tool-secret",
+        ingestion_api_secret="ingestion-secret",
         default_model_config_id="openai:gpt-4.1-mini",
         knowledge_embedding_model="all-MiniLM-L6-v2",
         knowledge_collection_name="personal_knowledge_base",
@@ -223,6 +224,34 @@ def fetch_retrieval_logs(session_factory: sessionmaker[Session]) -> list[Retriev
     with session_factory() as session:
         statement = select(RetrievalLog).order_by(RetrievalLog.created_at.asc(), RetrievalLog.id.asc())
         return list(session.scalars(statement))
+
+
+def store_knowledge_chunk(
+    session_factory: sessionmaker[Session],
+    *,
+    source: str,
+    section: str,
+    content: str,
+    chunk_index: int = 0,
+    section_chunk_index: int = 0,
+) -> None:
+    with session_factory() as session:
+        session.add(
+            KnowledgeChunk(
+                source=source,
+                source_type="markdown",
+                section=section,
+                content=content,
+                chunk_metadata={
+                    "source": source,
+                    "section": section,
+                    "source_type": "markdown",
+                    "chunk_index": chunk_index,
+                    "section_chunk_index": section_chunk_index,
+                },
+            )
+        )
+        session.commit()
 
 
 def test_health_returns_ok() -> None:
@@ -476,6 +505,120 @@ def test_chat_injects_retrieved_context_into_system_prompt(tmp_path) -> None:
     assert "Tumelo built a retrieval-grounded FastAPI chatbot." in fake_llm.system_prompts[0]
     assert "Answer as a professional assistant representing Tumelo." in fake_llm.system_prompts[0]
     assert "Do not invent experience, projects, employers, dates, tools, certifications, or achievements." in fake_llm.system_prompts[0]
+
+
+def test_chat_keyword_boost_prefers_project_name_matches_over_semantic_fallback(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="BeautyVerse is Tumelo's beauty services marketplace.")
+    fake_retrieval = FakeRetrievalService([])
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
+    store_knowledge_chunk(
+        session_factory,
+        source="experience.md",
+        section="Engineering Experience Themes",
+        content="Tumelo has experience building production-grade AI systems and software products.",
+    )
+    store_knowledge_chunk(
+        session_factory,
+        source="projects.md",
+        section="BeautyVerse - Beauty Services Marketplace",
+        content=(
+            "BeautyVerse is a marketplace and full-stack web application that enables "
+            "providers to manage service listings while customers browse beauty services."
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        json={"message": "Tell me about Tumelo's BeautyVerse project"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "BeautyVerse is Tumelo's beauty services marketplace."
+    assert len(fake_llm.calls) == 1
+    assert "BeautyVerse - Beauty Services Marketplace" in fake_llm.system_prompts[0]
+    assert "Engineering Experience Themes" not in fake_llm.system_prompts[0]
+
+    logs = fetch_retrieval_logs(session_factory)
+    assert len(logs) == 1
+    assert logs[0].retrieved_sources == ["projects.md"]
+    assert logs[0].used_fallback is False
+
+
+def test_chat_broad_project_query_prefers_multiple_project_chunks(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects.")
+    fake_retrieval = FakeRetrievalService(
+        [
+            build_retrieved_chunk(
+                source="experience.md",
+                section="Engineering Experience Themes",
+                content="Generic engineering summary.",
+            )
+        ]
+    )
+    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm, fake_retrieval)
+    store_knowledge_chunk(
+        session_factory,
+        source="projects.md",
+        section="LetsGo South Africa - AI-Powered Tourism Platform",
+        content="LetsGo South Africa is an AI-powered tourism platform.",
+        chunk_index=0,
+    )
+    store_knowledge_chunk(
+        session_factory,
+        source="projects.md",
+        section="BeautyVerse - Beauty Services Marketplace",
+        content="BeautyVerse is a beauty services marketplace.",
+        chunk_index=1,
+    )
+    store_knowledge_chunk(
+        session_factory,
+        source="projects.md",
+        section="MedDesk - AI Clinical Intake Proof of Concept",
+        content="MedDesk is an AI clinical intake proof of concept.",
+        chunk_index=2,
+        section_chunk_index=0,
+    )
+    store_knowledge_chunk(
+        session_factory,
+        source="projects.md",
+        section="MedDesk - AI Clinical Intake Proof of Concept",
+        content="Additional MedDesk detail chunk.",
+        chunk_index=3,
+        section_chunk_index=1,
+    )
+    store_knowledge_chunk(
+        session_factory,
+        source="experience.md",
+        section="Engineering Experience Themes",
+        content="Tumelo has broad AI engineering experience.",
+        chunk_index=4,
+    )
+
+    response = client.post(
+        "/chat",
+        json={"message": "Tell me about Tumelo's projects"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects."
+    assert retrieval_service.calls == []
+    assert "LetsGo South Africa - AI-Powered Tourism Platform" in fake_llm.system_prompts[0]
+    assert "BeautyVerse - Beauty Services Marketplace" in fake_llm.system_prompts[0]
+    assert "MedDesk - AI Clinical Intake Proof of Concept" in fake_llm.system_prompts[0]
+    assert "Engineering Experience Themes" not in fake_llm.system_prompts[0]
+    assert (
+        "summarize the most relevant projects from the approved project context"
+        in fake_llm.system_prompts[0]
+    )
+
+    logs = fetch_retrieval_logs(session_factory)
+    assert len(logs) == 1
+    assert logs[0].retrieved_sources == ["projects.md", "projects.md", "projects.md"]
+    assert logs[0].used_fallback is False
 
 
 def test_chat_personal_query_without_context_returns_safe_fallback(tmp_path) -> None:
