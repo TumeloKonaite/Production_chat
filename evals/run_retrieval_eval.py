@@ -87,38 +87,80 @@ def evaluate_examples(
     *,
     k: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    summary, per_query_results = evaluate_examples_for_k_values(
+        examples,
+        retrieval_service,
+        k_values=[k],
+    )
+    return {
+        "num_queries_total": summary["num_queries_total"],
+        "num_queries_evaluated": summary["num_queries_evaluated"],
+        "num_queries_without_expected_sources": summary["num_queries_without_expected_sources"],
+        "k": k,
+        "hit_at_k": summary["hit_at_k"],
+        "recall_at_k": summary["recall_at_k"],
+        "mean_precision_at_k": summary["mean_precision_at_k"],
+        "mrr": summary["mrr"],
+    }, per_query_results
+
+
+def evaluate_examples_for_k_values(
+    examples: list[RetrievalEvalExample],
+    retrieval_service: RetrievalService,
+    *,
+    k_values: list[int],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized_k_values = _normalize_k_values(k_values)
+    max_k = max(normalized_k_values)
     per_query_results: list[dict[str, Any]] = []
-    aggregate_hits: list[float] = []
-    aggregate_recalls: list[float] = []
-    aggregate_precisions: list[float] = []
+    aggregate_hits = {k: [] for k in normalized_k_values}
+    aggregate_recalls = {k: [] for k in normalized_k_values}
+    aggregate_precisions = {k: [] for k in normalized_k_values}
     aggregate_mrrs: list[float] = []
 
     for example in examples:
-        retrieved_chunks = retrieval_service.retrieve(example.question, top_k=k)
+        retrieved_chunks = retrieval_service.retrieve(example.question, top_k=max_k)
         retrieved_sources = unique_ranked_sources([chunk.source for chunk in retrieved_chunks])
         retrieved_chunk_ids = [chunk.id for chunk in retrieved_chunks]
         has_expected_sources = bool(example.expected_source_documents)
+        metrics_by_k: dict[str, dict[str, float]] = {}
 
         if has_expected_sources:
-            hit_score = hit_at_k(retrieved_sources, example.expected_source_documents, k)
-            recall_score = recall_at_k(retrieved_sources, example.expected_source_documents, k)
-            precision_score = precision_at_k(retrieved_sources, example.expected_source_documents, k)
             mrr_score = mrr(retrieved_sources, example.expected_source_documents)
             first_rank = first_relevant_rank(retrieved_sources, example.expected_source_documents)
 
-            aggregate_hits.append(hit_score)
-            aggregate_recalls.append(recall_score)
-            aggregate_precisions.append(precision_score)
             aggregate_mrrs.append(mrr_score)
             evaluation_group = "retrieval_evaluated"
+            for current_k in normalized_k_values:
+                hit_score = hit_at_k(
+                    retrieved_sources,
+                    example.expected_source_documents,
+                    current_k,
+                )
+                recall_score = recall_at_k(
+                    retrieved_sources,
+                    example.expected_source_documents,
+                    current_k,
+                )
+                precision_score = precision_at_k(
+                    retrieved_sources,
+                    example.expected_source_documents,
+                    current_k,
+                )
+                aggregate_hits[current_k].append(hit_score)
+                aggregate_recalls[current_k].append(recall_score)
+                aggregate_precisions[current_k].append(precision_score)
+                metrics_by_k[str(current_k)] = {
+                    "hit_at_k": hit_score,
+                    "recall_at_k": recall_score,
+                    "precision_at_k": precision_score,
+                }
         else:
-            hit_score = None
-            recall_score = None
-            precision_score = None
             mrr_score = None
             first_rank = None
             evaluation_group = "no_expected_source"
 
+        primary_metrics = metrics_by_k.get(str(max_k), {})
         per_query_results.append(
             {
                 "id": example.id,
@@ -128,9 +170,11 @@ def evaluate_examples(
                 "retrieved_chunk_ids": retrieved_chunk_ids,
                 "has_expected_sources": has_expected_sources,
                 "evaluation_group": evaluation_group,
-                "hit_at_k": hit_score,
-                "recall_at_k": recall_score,
-                "precision_at_k": precision_score,
+                "evaluated_k_values": normalized_k_values,
+                "metrics_by_k": metrics_by_k,
+                "hit_at_k": primary_metrics.get("hit_at_k"),
+                "recall_at_k": primary_metrics.get("recall_at_k"),
+                "precision_at_k": primary_metrics.get("precision_at_k"),
                 "mrr": mrr_score,
                 "first_relevant_rank": first_rank,
             }
@@ -144,11 +188,20 @@ def evaluate_examples(
         "num_queries_total": num_queries_total,
         "num_queries_evaluated": num_queries_evaluated,
         "num_queries_without_expected_sources": num_queries_without_expected_sources,
-        "k": k,
-        "hit_at_k": _mean_or_none(aggregate_hits),
-        "recall_at_k": _mean_or_none(aggregate_recalls),
-        "mean_precision_at_k": _mean_or_none(aggregate_precisions),
+        "k": max_k,
+        "k_values": normalized_k_values,
+        "hit_at_k": _mean_or_none(aggregate_hits[max_k]),
+        "recall_at_k": _mean_or_none(aggregate_recalls[max_k]),
+        "mean_precision_at_k": _mean_or_none(aggregate_precisions[max_k]),
         "mrr": _mean_or_none(aggregate_mrrs),
+        "metrics_by_k": {
+            str(current_k): {
+                "hit_at_k": _mean_or_none(aggregate_hits[current_k]),
+                "recall_at_k": _mean_or_none(aggregate_recalls[current_k]),
+                "mean_precision_at_k": _mean_or_none(aggregate_precisions[current_k]),
+            }
+            for current_k in normalized_k_values
+        },
     }
     return summary, per_query_results
 
@@ -329,6 +382,15 @@ def _mean_or_none(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _normalize_k_values(k_values: list[int]) -> list[int]:
+    normalized = sorted(set(k_values))
+    if not normalized:
+        raise ValueError("At least one k value must be provided.")
+    if any(k <= 0 for k in normalized):
+        raise ValueError("All k values must be greater than 0.")
+    return normalized
 
 
 if __name__ == "__main__":

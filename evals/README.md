@@ -185,3 +185,27 @@ The three active datasets should stay intentionally distinct:
 Do not copy the same question into multiple datasets. If a new question could
 fit more than one dataset, choose the one whose scoring contract best matches
 the maintenance goal.
+
+## Retrieval Embedding Matrix
+
+Use `scripts/run_embedding_experiment.py` to compare retrieval quality across
+multiple embedding provider/model combinations against the same dataset.
+
+Example config:
+
+```text
+evals/configs/retrieval_embedding_matrix.example.json
+```
+
+Example command:
+
+```text
+python scripts/run_embedding_experiment.py --config evals/configs/retrieval_embedding_matrix.example.json
+```
+
+Operational note:
+
+- The runner rebuilds the indexed knowledge per embedding run before scoring.
+- Each configured run still has to match the current pgvector storage
+  dimension. If a run's configured `dimension` does not match the database
+  vector column, the runner fails fast instead of mixing incompatible indexes.
