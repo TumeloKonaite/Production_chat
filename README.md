@@ -131,6 +131,37 @@ If you want the local Postgres instance from `docker-compose.yml`, start it firs
 docker compose up -d db
 ```
 
+If you also want pgAdmin for local database inspection, start both services:
+
+```bash
+docker compose up -d db pgadmin
+```
+
+pgAdmin is then available at `http://127.0.0.1:5051` with:
+
+```text
+Email: admin@local.dev
+Password: admin
+```
+
+To register the Compose database inside pgAdmin, add a new server with:
+
+```text
+Host: db
+Port: 5432
+Database: production_chatbot
+Username: postgres
+Password: postgres
+```
+
+Use `db` as the host from pgAdmin because both containers run on the same Compose network. From the host machine, Postgres remains available on `127.0.0.1:5434`.
+
+If `5051` is already in use on your machine, override the host port before starting Compose:
+
+```env
+PGADMIN_PORT=5052
+```
+
 If you are using an existing local Postgres server instead of the Compose database, create the target database once before running Alembic:
 
 ```sql
@@ -148,6 +179,8 @@ uvicorn main:app --reload
 ```bash
 docker compose up --build
 ```
+
+`docker compose up -d` starts the full local stack, including `db` and `pgadmin`. If you only want the database and admin UI, use `docker compose up -d db pgadmin`. The pgAdmin data directory is persisted in the `pgadmin_data` volume so saved server registrations survive container restarts.
 
 ## Example request
 
