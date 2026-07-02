@@ -157,6 +157,35 @@ def test_ingest_knowledge_loads_and_persists_all_documents(tmp_path) -> None:
     assert len(retrieval_service.replaced_chunk_ids) == 2
 
 
+def test_ingest_knowledge_uses_configured_chunking_values(tmp_path) -> None:
+    source_dir = tmp_path / "source"
+    write_source_file(
+        source_dir,
+        "projects.md",
+        "# Projects\n\n## Retrieval\n\n" + " ".join(["retrieval"] * 900),
+    )
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        _, fine_grained_results = ingest_knowledge(
+            session,
+            retrieval_service,
+            source_dir=source_dir,
+            chunk_size=300,
+            chunk_overlap=50,
+        )
+        _, coarse_results = ingest_knowledge(
+            session,
+            retrieval_service,
+            source_dir=source_dir,
+            chunk_size=1000,
+            chunk_overlap=200,
+        )
+
+    assert fine_grained_results[0].chunk_count > coarse_results[0].chunk_count
+
+
 def test_knowledge_ingestion_service_returns_summary(tmp_path) -> None:
     source_dir = tmp_path / "source"
     write_source_file(source_dir, "profile.md", "# Profile\n\nTumelo builds AI products.\n")

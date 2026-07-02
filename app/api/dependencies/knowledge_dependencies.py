@@ -14,6 +14,8 @@ def get_knowledge_ingestion_service_factory(
     def build_service() -> KnowledgeIngestionService:
         return KnowledgeIngestionService(
             retrieval_service=RetrievalService(settings=settings),
+            chunk_size=settings.knowledge_chunk_size,
+            chunk_overlap=settings.knowledge_chunk_overlap,
         )
 
     return build_service

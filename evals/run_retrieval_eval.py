@@ -4,7 +4,6 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import datetime
-import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -16,7 +15,6 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings, get_settings
-from app.knowledge.ingestion.chunker import chunk_markdown_document
 from app.services.retrieval import RetrievalService
 from evals.metrics.retrieval_metrics import (
     first_relevant_rank,
@@ -162,8 +160,17 @@ def build_run_config(
     top_k: int,
     timestamp: str,
     argv: list[str],
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
 ) -> dict[str, Any]:
-    chunk_defaults = _chunking_defaults()
+    resolved_chunk_size = chunk_size
+    if resolved_chunk_size is None:
+        resolved_chunk_size = getattr(settings, "knowledge_chunk_size", None)
+
+    resolved_chunk_overlap = chunk_overlap
+    if resolved_chunk_overlap is None:
+        resolved_chunk_overlap = getattr(settings, "knowledge_chunk_overlap", None)
+
     return {
         "timestamp": timestamp,
         "dataset_path": str(dataset_path),
@@ -171,8 +178,8 @@ def build_run_config(
         "embedding_model": settings.knowledge_embedding_model,
         "vector_store_type": "pgvector",
         "retrieval_strategy": "similarity_search_with_relevance_scores",
-        "chunk_size": chunk_defaults["chunk_size"],
-        "chunk_overlap": chunk_defaults["chunk_overlap"],
+        "chunk_size": resolved_chunk_size,
+        "chunk_overlap": resolved_chunk_overlap,
         "settings_used_by_retriever": {
             "default_retrieval_config": settings.default_retrieval_config,
             "retrieval_top_k": settings.retrieval_top_k,
@@ -205,7 +212,19 @@ def write_artifacts(
     config_path = output_dir / "config.json"
 
     results_json_path.write_text(
-        json.dumps({"summary": summary, "results": results}, indent=2, ensure_ascii=True) + "\n",
+        json.dumps(
+            {
+                "summary": summary,
+                "chunking": {
+                    "chunk_size": config.get("chunk_size"),
+                    "chunk_overlap": config.get("chunk_overlap"),
+                },
+                "results": results,
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     config_path.write_text(
@@ -284,16 +303,6 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
             row["retrieved_sources"] = json.dumps(result["retrieved_sources"], ensure_ascii=True)
             row["retrieved_chunk_ids"] = json.dumps(result["retrieved_chunk_ids"], ensure_ascii=True)
             writer.writerow(row)
-
-
-def _chunking_defaults() -> dict[str, int | None]:
-    signature = inspect.signature(chunk_markdown_document)
-    chunk_size = signature.parameters["chunk_size"].default
-    chunk_overlap = signature.parameters["chunk_overlap"].default
-    return {
-        "chunk_size": chunk_size if isinstance(chunk_size, int) else None,
-        "chunk_overlap": chunk_overlap if isinstance(chunk_overlap, int) else None,
-    }
 
 
 def _git_commit_sha() -> str | None:

@@ -109,6 +109,8 @@ TAVUS_TOOL_SECRET=
 INGESTION_API_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 MODEL_CONFIGS_JSON=
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
 DEFAULT_PROMPT_VERSION=v1_professional
 CONVERSATION_HISTORY_LIMIT=10
 RETRIEVAL_TOP_K=5
@@ -293,11 +295,22 @@ curl -X POST http://localhost:8000/api/tavus/conversations/end \
 
 The markdown knowledge source of truth lives under `app/knowledge/source/`. Both the local CLI script and the protected admin API call the same backend ingestion service.
 
+Chunking is configurable through:
+
+```env
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+```
+
+`CHUNK_SIZE` must be positive, `CHUNK_OVERLAP` must be zero or positive, and `CHUNK_OVERLAP` must be smaller than `CHUNK_SIZE`.
+
 ### Run ingestion from the CLI
 
 ```bash
 uv run python .\scripts\ingest_knowledge.py
 ```
+
+The CLI prints the chunking config used for that ingestion run.
 
 ### Trigger ingestion from the backend
 
@@ -505,6 +518,22 @@ python evals/run_rag_eval.py \
 ```
 
 The canonical RAG benchmark contract is documented in `evals/README.md`.
+
+The retrieval-only baseline workflow:
+
+```bash
+python evals/run_retrieval_eval.py --k 5
+```
+
+The retrieval artifact payload includes the chunk size and overlap used for that run.
+
+To compare multiple chunking strategies without editing code:
+
+```bash
+python scripts/run_chunking_experiment.py --configs "300:50,500:100,800:150,1000:200"
+```
+
+This re-ingests the knowledge base for each chunk config, runs retrieval eval, writes per-run artifacts, and saves comparison outputs under `evals/results/chunking_experiments/`.
 
 The prompt comparison workflow:
 

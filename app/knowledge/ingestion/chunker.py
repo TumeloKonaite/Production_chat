@@ -6,6 +6,7 @@ from datetime import datetime
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
+from app.config import DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, DEFAULT_KNOWLEDGE_CHUNK_SIZE
 from app.knowledge.ingestion.loader import SourceDocument
 
 
@@ -22,9 +23,16 @@ class ChunkedDocument:
 def chunk_markdown_document(
     document: SourceDocument,
     *,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
 ) -> list[ChunkedDocument]:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive.")
+    if chunk_overlap < 0:
+        raise ValueError("chunk_overlap must be zero or positive.")
+    if chunk_overlap >= chunk_size:
+        raise ValueError("chunk_overlap must be smaller than chunk_size.")
+
     # Split on markdown headings first so the resulting chunks keep useful
     # section context such as "Projects" or "Portfolio Chatbot".
     header_splitter = MarkdownHeaderTextSplitter(
@@ -41,7 +49,7 @@ def chunk_markdown_document(
     )
 
     section_documents = header_splitter.split_text(document.text)
-    
+
     if not section_documents and document.text.strip():
         section_documents = [Document(page_content=document.text, metadata={})]
 
