@@ -25,7 +25,7 @@ from app.services.chat.prompting import (
 from app.services.llm import LLMChatMessage, LLMService
 from app.services.retrieval import RetrievedChunk, RetrievalService
 
-DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "prompt_eval_questions.jsonl"
+DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "prompt_eval_questions.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "prompt_eval_results"
 DEFAULT_PROMPTS_DIR = ROOT_DIR / "app" / "infrastructure" / "prompts" / "templates"
 DEFAULT_TEMPERATURE = 0.2

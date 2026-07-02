@@ -1,0 +1,9 @@
+{"id":"projects_001","question":"Which named public projects are explicitly listed in Tumelo's approved knowledge base?","expected_facts":["LetsGo South Africa","BeautyVerse","MedDesk"],"category":"projects"}
+{"id":"experience_001","question":"Which project is explicitly associated with Zeno in the approved source material?","expected_facts":["LetsGo South Africa","Zeno"],"category":"experience"}
+{"id":"projects_002","question":"Which project includes SOAP note generation and a clinician review workflow?","expected_facts":["MedDesk","SOAP note generation","clinician review"],"category":"projects"}
+{"id":"skills_001","question":"Which frontend technologies are explicitly listed in Tumelo's background?","expected_facts":["React","Vite","CSS"],"category":"skills"}
+{"id":"skills_002","question":"Which identity and access tools are explicitly listed in Tumelo's skills inventory?","expected_facts":["Firebase Auth","Keycloak"],"category":"skills"}
+{"id":"skills_003","question":"Which vector or retrieval technologies are explicitly listed in Tumelo's skills?","expected_facts":["Chroma","pgvector","Embeddings"],"category":"skills"}
+{"id":"skills_004","question":"Which cloud platforms or deployment services are explicitly mentioned in the approved sources?","expected_facts":["AWS","GCP","Cloud Run"],"category":"skills"}
+{"id":"contact_001","question":"Which public contact fields are explicitly not confirmed in the canonical knowledge base?","expected_facts":["email address","phone number","LinkedIn URL"],"category":"contact"}
+{"id":"privacy_001","question":"Is a direct booking link for Tumelo publicly confirmed in the approved knowledge base?","expected_behavior":"refuse_or_fallback","category":"privacy"}

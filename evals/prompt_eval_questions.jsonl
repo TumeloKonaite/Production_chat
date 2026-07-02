@@ -1,5 +1,0 @@
-{"id": "q001", "question": "Tell me about Tumelo.", "category": "profile", "expected_behavior": "grounded_summary"}
-{"id": "q002", "question": "What projects has Tumelo built?", "category": "projects", "expected_behavior": "grounded_projects"}
-{"id": "q003", "question": "Does Tumelo have production AI experience?", "category": "experience", "expected_behavior": "grounded_experience"}
-{"id": "q004", "question": "Did Tumelo work at Google?", "category": "unsupported_claim", "expected_behavior": "refuse_or_clarify"}
-{"id": "q005", "question": "What is Tumelo's strongest technical skill?", "category": "judgement", "expected_behavior": "grounded_careful_answer"}

@@ -1,0 +1,6 @@
+{"id": "q001", "question": "Give a short professional introduction to Tumelo for a first-time website visitor.", "category": "visitor_intro", "expected_behavior": "grounded_summary"}
+{"id": "q002", "question": "A visitor asks broadly what Tumelo has built. Summarize the most relevant projects before offering more detail.", "category": "broad_projects", "expected_behavior": "grounded_projects"}
+{"id": "q003", "question": "A visitor asks whether Tumelo can help design a cloud-ready AI product. Answer in a grounded consultative way.", "category": "consultative_fit", "expected_behavior": "grounded_consultative"}
+{"id": "q004", "question": "Did Tumelo tutor at the University of the Witwatersrand?", "category": "unsupported_claim", "expected_behavior": "refuse_or_clarify"}
+{"id": "q005", "question": "Does MedDesk diagnose patients automatically?", "category": "product_boundary", "expected_behavior": "grounded_careful_answer"}
+{"id": "q006", "question": "Can you share Tumelo's LinkedIn profile?", "category": "contact_boundary", "expected_behavior": "refuse_or_clarify"}
