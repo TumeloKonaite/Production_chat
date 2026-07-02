@@ -9,11 +9,18 @@ app/
   main.py
   config.py
   api/
-    chat.py
+    chat/
+      __init__.py
+      routes.py
+      schemas.py
+    tavus/
+      __init__.py
+      routes.py
+      schemas.py
     dependencies/
       chat_dependencies.py
       common_dependencies.py
-    schema.py
+      tavus_dependencies.py
   Dockerfile
   infrastructure/
     llm/
@@ -26,6 +33,8 @@ app/
       templates/
         v1_professional.md
         v2_warm_conversational.md
+    tavus/
+      client.py
     tracking/
       experiment_tracker.py
       mlflow_client.py
@@ -40,6 +49,9 @@ app/
       errors.py
       prompting.py
       service.py
+    tavus/
+      errors.py
+      service.py
     evals/
       eval_service.py
       model_experiment_service.py
@@ -53,6 +65,19 @@ evals/
   run_model_eval.py
 alembic/
   versions/
+frontend/
+  src/
+    App.tsx
+    App.css
+    main.tsx
+    vite-env.d.ts
+  .env.example
+  index.html
+  package.json
+  README.md
+  tsconfig.json
+  tsconfig.node.json
+  vite.config.ts
 tests/
   test_chat_api.py
 ```
@@ -67,6 +92,12 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
 OPENAI_API_KEY=
+TAVUS_API_KEY=
+TAVUS_BASE_URL=https://tavusapi.com
+TAVUS_FACE_ID=
+TAVUS_PAL_ID=
+PUBLIC_BACKEND_URL=
+TAVUS_TOOL_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 OPENAI_MODEL=gpt-4.1-mini
 DEFAULT_PROMPT_VERSION=v1_professional
@@ -146,6 +177,103 @@ Example response:
   "estimated_cost_usd": 0.000768
 }
 ```
+
+## Tavus integration
+
+Tavus is treated as the video interface layer. The backend remains responsible for retrieval, prompt selection, model selection, and response logging.
+
+### Start a Tavus conversation
+
+```bash
+curl -X POST http://localhost:8000/api/tavus/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"visitor_name":"Website visitor"}'
+```
+
+Example response:
+
+```json
+{
+  "conversation_id": "tavus-conversation-id",
+  "conversation_url": "https://..."
+}
+```
+
+### Tavus tool endpoint
+
+Configure Tavus to call:
+
+```text
+POST https://your-backend.com/api/tavus/tools/ask-tumelo
+```
+
+With header:
+
+```text
+x-tavus-tool-secret: <TAVUS_TOOL_SECRET>
+```
+
+Tool name:
+
+```text
+ask_tumelo_backend
+```
+
+Tool purpose:
+
+```text
+Ask Tumelo's portfolio chatbot backend for grounded answers about Tumelo's experience, projects, skills, education, certifications, and contact details.
+```
+
+Expected Tavus behavior:
+
+```text
+Use this tool for factual questions about Tumelo.
+Do not invent facts.
+Speak the backend response as the final answer.
+```
+
+### End a Tavus conversation
+
+```bash
+curl -X POST http://localhost:8000/api/tavus/conversations/end \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_id":"tavus-conversation-id"}'
+```
+
+### Frontend handoff
+
+This repository now includes a local Tavus test frontend under `frontend/`.
+
+Run it with:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite app runs at `http://localhost:5173` and uses:
+
+```env
+VITE_BACKEND_URL=http://localhost:8000
+```
+
+For Tavus local callback testing, the backend `.env` should set:
+
+```env
+PUBLIC_BACKEND_URL=<ngrok-or-cloudflare-url>
+```
+
+Tavus must call the public backend URL, not `localhost`.
+
+The app follows this MVP flow:
+
+1. Render a `Talk to Tumelo's AI Avatar` button.
+2. Call `POST /api/tavus/conversations`.
+3. Read `conversation_url` from the backend response.
+4. Embed that URL in an iframe.
+5. End the conversation with `POST /api/tavus/conversations/end`.
 
 ## Model experiments
 
