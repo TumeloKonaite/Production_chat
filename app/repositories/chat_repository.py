@@ -41,12 +41,34 @@ class ConversationRepository:
         except SQLAlchemyError as exc:
             raise ConversationRepositoryError() from exc
 
+    def get_conversation_by_visitor_id(self, visitor_id: str) -> Conversation | None:
+        statement = select(Conversation).where(Conversation.visitor_id == visitor_id)
+        try:
+            return self._session.scalar(statement)
+        except SQLAlchemyError as exc:
+            raise ConversationRepositoryError() from exc
+
+    def update_conversation(
+        self,
+        conversation: Conversation,
+        *,
+        visitor_id: str | None = None,
+        title: str | None = None,
+    ) -> Conversation:
+        if visitor_id is not None:
+            conversation.visitor_id = visitor_id
+        if title is not None:
+            conversation.title = title
+        conversation.updated_at = utcnow()
+        return self._commit_and_refresh(conversation)
+
     def add_message(
         self,
         *,
         conversation: Conversation,
         role: str,
         content: str,
+        channel: str = "web_chat",
         model: str | None = None,
         model_provider: str | None = None,
         model_name: str | None = None,
@@ -58,12 +80,14 @@ class ConversationRepository:
         output_tokens: int | None = None,
         total_tokens: int | None = None,
         estimated_cost_usd: float | None = None,
+        message_metadata: dict[str, object] | None = None,
     ) -> Message:
         conversation.updated_at = utcnow()
         message = Message(
             conversation=conversation,
             role=role,
             content=content,
+            channel=channel,
             model=model,
             model_provider=model_provider,
             model_name=model_name,
@@ -75,6 +99,7 @@ class ConversationRepository:
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             estimated_cost_usd=estimated_cost_usd,
+            message_metadata=dict(message_metadata or {}),
         )
         self._session.add(message)
         return self._commit_and_refresh(message)

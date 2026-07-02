@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.chat import router as chat_router
+from app.api.tavus import router as tavus_router
 from app.infrastructure.llm import UnknownModelError
 from app.infrastructure.prompts import UnknownPromptVersionError
 from app.services.chat import (
@@ -12,11 +14,20 @@ from app.services.chat import (
     InvalidConversationIdError,
 )
 from app.services.llm import LLMConfigurationError, LLMServiceError
+from app.services.tavus import TavusConfigurationError, TavusServiceError
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Production Chatbot")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
     app.include_router(chat_router)
+    app.include_router(tavus_router)
 
     @app.get("/health", tags=["health"])
     async def healthcheck() -> dict[str, str]:
@@ -83,6 +94,16 @@ def create_app() -> FastAPI:
             content={"detail": "Chat service is not configured correctly."},
         )
 
+    @app.exception_handler(TavusConfigurationError)
+    async def handle_tavus_configuration_error(
+        _: Request,
+        __: TavusConfigurationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Tavus integration is not configured correctly."},
+        )
+
     @app.exception_handler(LLMServiceError)
     async def handle_llm_error(_: Request, __: LLMServiceError) -> JSONResponse:
         # Upstream provider failures are normalized to one safe client-facing message.
@@ -109,6 +130,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unable to generate assistant response. Please try again."},
+        )
+
+    @app.exception_handler(TavusServiceError)
+    async def handle_tavus_service_error(
+        _: Request,
+        __: TavusServiceError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"detail": "Unable to complete Tavus request. Please try again."},
         )
 
     @app.exception_handler(Exception)

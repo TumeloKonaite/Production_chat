@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import uuid
 
 from app.config import Settings
-from app.infrastructure.prompts import PromptLoader
+from app.infrastructure.prompts import PromptLoader, normalize_prompt_version
 from app.repositories import (
     ConversationRepository,
     ConversationRepositoryError,
@@ -70,17 +70,62 @@ class ChatService:
         prompt_version: str | None = None,
         model_config_id: str | None = None,
     ) -> ChatReply:
+        return await self._generate_reply(
+            message=message,
+            conversation_id=conversation_id,
+            prompt_version=prompt_version,
+            model_config_id=model_config_id,
+            channel="web_chat",
+            message_metadata={},
+            allow_external_conversation_id=False,
+        )
+
+    async def generate_answer(
+        self,
+        *,
+        user_message: str,
+        conversation_id: str | None = None,
+        channel: str = "web_chat",
+        metadata: dict[str, object] | None = None,
+        prompt_version: str | None = None,
+        model_config_id: str | None = None,
+    ) -> ChatReply:
+        return await self._generate_reply(
+            message=user_message,
+            conversation_id=conversation_id,
+            prompt_version=prompt_version,
+            model_config_id=model_config_id,
+            channel=channel,
+            message_metadata=dict(metadata or {}),
+            allow_external_conversation_id=channel == "tavus_video",
+        )
+
+    async def _generate_reply(
+        self,
+        *,
+        message: str,
+        conversation_id: str | None,
+        prompt_version: str | None,
+        model_config_id: str | None,
+        channel: str,
+        message_metadata: dict[str, object],
+        allow_external_conversation_id: bool,
+    ) -> ChatReply:
         normalized_message = message.strip()
         if not normalized_message:
             raise InvalidChatMessageError("Chat message cannot be empty.")
 
-        selected_prompt_version = prompt_version or self.settings.default_prompt_version
+        selected_prompt_version = normalize_prompt_version(
+            prompt_version or self.settings.default_prompt_version
+        )
         base_prompt = self.prompt_loader.load(selected_prompt_version)
 
         conversation = self._get_or_create_conversation(
             conversation_id,
             prompt_version=selected_prompt_version,
             model_config_id=model_config_id,
+            allow_external_conversation_id=allow_external_conversation_id,
+            external_title=self._extract_title_from_metadata(message_metadata),
         )
         conversation.prompt_version = selected_prompt_version
         selected_model_config = self.llm_service.get_model_config(
@@ -94,6 +139,8 @@ class ChatService:
                 conversation=conversation,
                 role="user",
                 content=normalized_message,
+                channel=channel,
+                message_metadata=message_metadata,
             )
             recent_messages = self.repository.list_recent_messages(
                 conversation.id,
@@ -137,7 +184,12 @@ class ChatService:
             )
 
         # Only persist the assistant turn after the final response succeeds.
-        self._store_assistant_message(conversation=conversation, llm_response=llm_response)
+        self._store_assistant_message(
+            conversation=conversation,
+            llm_response=llm_response,
+            channel=channel,
+            message_metadata=message_metadata,
+        )
 
         return ChatReply(
             conversation_id=conversation.id,
@@ -159,11 +211,22 @@ class ChatService:
         *,
         prompt_version: str,
         model_config_id: str | None,
+        allow_external_conversation_id: bool = False,
+        external_title: str | None = None,
     ):
         if conversation_id is None:
             return self._create_conversation(
                 prompt_version=prompt_version,
                 model_config_id=model_config_id,
+                title=external_title,
+            )
+
+        if allow_external_conversation_id and not self._is_valid_conversation_id(conversation_id):
+            return self._get_or_create_external_conversation(
+                external_conversation_id=conversation_id,
+                prompt_version=prompt_version,
+                model_config_id=model_config_id,
+                title=external_title,
             )
 
         self._validate_conversation_id(conversation_id)
@@ -185,15 +248,52 @@ class ChatService:
         *,
         prompt_version: str,
         model_config_id: str | None,
+        visitor_id: str | None = None,
+        title: str | None = None,
     ):
         selected_model_config = self.llm_service.get_model_config(model_config_id)
         try:
             return self.repository.create_conversation(
+                visitor_id=visitor_id,
+                title=title,
                 model=selected_model_config.config_id,
                 prompt_version=prompt_version,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
+
+    def _get_or_create_external_conversation(
+        self,
+        *,
+        external_conversation_id: str,
+        prompt_version: str,
+        model_config_id: str | None,
+        title: str | None,
+    ):
+        try:
+            conversation = self.repository.get_conversation_by_visitor_id(external_conversation_id)
+        except ConversationRepositoryError as exc:
+            raise ChatPersistenceError() from exc
+
+        if conversation is not None:
+            if title and conversation.title != title:
+                try:
+                    conversation = self.repository.update_conversation(
+                        conversation,
+                        title=title,
+                    )
+                except ConversationRepositoryError as exc:
+                    raise ChatPersistenceError() from exc
+            if model_config_id is not None:
+                conversation.model = self.llm_service.get_model_config(model_config_id).config_id
+            return conversation
+
+        return self._create_conversation(
+            prompt_version=prompt_version,
+            model_config_id=model_config_id,
+            visitor_id=external_conversation_id,
+            title=title,
+        )
 
     def _retrieve_chunks(self, message: str) -> list[RetrievedChunk]:
         try:
@@ -250,12 +350,15 @@ class ChatService:
         *,
         conversation,
         llm_response: LLMGeneratedResponse,
+        channel: str,
+        message_metadata: dict[str, object],
     ) -> None:
         try:
             self.repository.add_message(
                 conversation=conversation,
                 role="assistant",
                 content=llm_response.message,
+                channel=channel,
                 model=llm_response.model,
                 model_provider=llm_response.model_provider,
                 model_name=llm_response.model_name,
@@ -267,12 +370,25 @@ class ChatService:
                 output_tokens=llm_response.token_usage.output_tokens,
                 total_tokens=llm_response.token_usage.total_tokens,
                 estimated_cost_usd=llm_response.estimated_cost_usd,
+                message_metadata=message_metadata,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
 
     def _validate_conversation_id(self, conversation_id: str) -> None:
+        if not self._is_valid_conversation_id(conversation_id):
+            raise InvalidConversationIdError("conversation_id must be a valid UUID.")
+
+    def _is_valid_conversation_id(self, conversation_id: str) -> bool:
         try:
             uuid.UUID(conversation_id)
-        except ValueError as exc:
-            raise InvalidConversationIdError("conversation_id must be a valid UUID.") from exc
+        except ValueError:
+            return False
+        return True
+
+    def _extract_title_from_metadata(self, metadata: dict[str, object]) -> str | None:
+        visitor_name = metadata.get("visitor_name")
+        if not isinstance(visitor_name, str):
+            return None
+        normalized_visitor_name = visitor_name.strip()
+        return normalized_visitor_name or None

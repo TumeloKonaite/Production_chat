@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+PROMPT_VERSION_ALIASES = {
+    "v1": "v1_professional",
+    "v2": "v2_warm_conversational",
+}
+
 
 class UnknownPromptVersionError(ValueError):
     """Raised when a prompt version does not map to a versioned template file."""
@@ -18,7 +23,7 @@ class PromptLoader:
         self.prompts_dir = prompts_dir
 
     def load(self, prompt_version: str) -> str:
-        normalized_version = prompt_version.strip()
+        normalized_version = normalize_prompt_version(prompt_version)
         available_paths = self._available_prompt_paths()
         prompt_path = available_paths.get(normalized_version)
         if prompt_path is None:
@@ -35,3 +40,8 @@ class PromptLoader:
             for path in self.prompts_dir.glob("*.md")
             if path.is_file()
         }
+
+
+def normalize_prompt_version(prompt_version: str) -> str:
+    normalized_version = prompt_version.strip()
+    return PROMPT_VERSION_ALIASES.get(normalized_version, normalized_version)

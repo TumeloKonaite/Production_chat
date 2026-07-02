@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
+from app.api.chat.schemas import ChatRequest, ChatResponse, TokenUsageResponse
 from app.api.dependencies.chat_dependencies import get_chat_service
-from app.api.schema import ChatRequest, ChatResponse, TokenUsageResponse
 from app.services.chat import ChatService
 
 router = APIRouter(tags=["chat"])

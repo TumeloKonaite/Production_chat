@@ -155,6 +155,12 @@ def build_test_settings(*, default_prompt_version: str = "v1_professional") -> S
     return Settings(
         database_url="sqlite:///unused-for-tests.db",
         openai_api_key="test-key",
+        tavus_api_key="tavus-test-key",
+        tavus_base_url="https://tavus.example",
+        tavus_face_id="face_123",
+        tavus_pal_id="pal_123",
+        public_backend_url="https://backend.example",
+        tavus_tool_secret="tool-secret",
         default_model_config_id="openai:gpt-4.1-mini",
         knowledge_embedding_model="all-MiniLM-L6-v2",
         knowledge_collection_name="personal_knowledge_base",
@@ -279,11 +285,14 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[0].content == "Which project best shows production readiness?"
     assert messages[0].model is None
+    assert messages[0].channel == "web_chat"
+    assert messages[0].message_metadata == {}
     assert messages[1].content == "Production readiness is strongest in the RAG stack."
     assert messages[1].model == "gpt-4.1-mini"
     assert messages[1].model_provider == "openai"
     assert messages[1].model_name == "gpt-4.1-mini"
     assert messages[1].model_config_id == "openai:gpt-4.1-mini"
+    assert messages[1].channel == "web_chat"
     assert messages[1].prompt_version == "v1_professional"
     assert messages[1].retrieval_config == "default"
     assert messages[1].latency_ms == 842
@@ -291,6 +300,7 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert messages[1].output_tokens == 180
     assert messages[1].total_tokens == 1380
     assert messages[1].estimated_cost_usd == pytest.approx(0.000768)
+    assert messages[1].message_metadata == {}
 
 
 def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:
@@ -541,6 +551,33 @@ def test_chat_uses_requested_prompt_version(tmp_path) -> None:
         conversation = session.get(Conversation, response.json()["conversation_id"])
         assert conversation is not None
         assert conversation.prompt_version == "v2_warm_conversational"
+
+
+def test_chat_normalizes_legacy_prompt_version_alias(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tumelo builds practical AI systems.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        "/chat",
+        json={
+            "message": "Tell me about Tumelo's work.",
+            "prompt_version": "v1",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["prompt_version"] == "v1_professional"
+    assert fake_llm.prompt_versions == ["v1_professional"]
+
+    messages = fetch_messages(session_factory)
+    assert messages[1].prompt_version == "v1_professional"
+
+    with session_factory() as session:
+        conversation = session.get(Conversation, response.json()["conversation_id"])
+        assert conversation is not None
+        assert conversation.prompt_version == "v1_professional"
 
 
 def test_chat_uses_requested_model_config_id(tmp_path) -> None:
