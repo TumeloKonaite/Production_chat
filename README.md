@@ -60,10 +60,14 @@ app/
       errors.py
       service.py
 evals/
+  README.md
   datasets/
-    personal_chatbot_eval_set.jsonl
+    model_eval_dataset.jsonl
+    portfolio_eval_dataset.jsonl
+    prompt_eval_questions.jsonl
   results/
   run_model_eval.py
+  run_rag_eval.py
 alembic/
   versions/
 frontend/
@@ -487,7 +491,7 @@ The model comparison workflow:
 python evals/run_model_eval.py \
   --models openai:gpt-4.1-mini openai:gpt-4.1 \
   --prompt-version v1_professional \
-  --dataset evals/datasets/personal_chatbot_eval_set.jsonl \
+  --dataset evals/datasets/model_eval_dataset.jsonl \
   --experiment-name personal-chatbot-model-comparison
 ```
 
@@ -499,6 +503,8 @@ python evals/run_rag_eval.py \
   --prompt-version v1_professional \
   --run-name portfolio-rag-eval
 ```
+
+The canonical RAG benchmark contract is documented in `evals/README.md`.
 
 The prompt comparison workflow:
 

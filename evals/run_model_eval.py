@@ -24,7 +24,7 @@ from app.services.evals.model_experiment_service import ModelExperimentService
 from app.services.llm import LLMService
 from app.services.retrieval import RetrievalService
 
-DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "personal_chatbot_eval_set.jsonl"
+DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "model_eval_dataset.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results"
 DEFAULT_PROMPTS_DIR = ROOT_DIR / "app" / "infrastructure" / "prompts" / "templates"
 DEFAULT_TEMPERATURE = 0.2
@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset-version",
-        default="personal_chatbot_eval_set_v1",
+        default="model_eval_dataset_v1",
         help="Version label logged with each experiment run.",
     )
     return parser.parse_args()
