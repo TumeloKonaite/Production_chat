@@ -136,6 +136,14 @@ The canonical benchmark should preserve representative coverage across:
 If you need informal groupings beyond the existing `category` field, prefer
 documenting the grouping here rather than adding new schema fields.
 
+Operational validation:
+
+- Retrieval eval runners validate expected-source coverage before scoring.
+- The default minimum coverage is `0.95`, which allows at most one missing
+  `expected_source_documents` row in the current 25-query benchmark.
+- If coverage falls below that threshold, the runner fails fast before logging
+  comparison metrics.
+
 ## Adding or changing questions
 
 When adding a new benchmark row:

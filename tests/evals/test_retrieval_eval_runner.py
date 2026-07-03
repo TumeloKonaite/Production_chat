@@ -4,14 +4,19 @@ import json
 from pathlib import Path
 
 from app.services.retrieval import RetrievedChunk
+import pytest
 from evals.run_retrieval_eval import (
     RetrievalEvalExample,
+    RetrievalEvalDatasetValidationError,
     build_run_config,
     build_tracking_run_name,
     create_output_directory,
     evaluate_examples,
     evaluate_examples_for_k_values,
+    format_dataset_validation_summary,
+    load_and_validate_dataset,
     log_run_to_tracker,
+    validate_dataset_examples,
     write_artifacts,
 )
 
@@ -98,6 +103,7 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
     assert summary == {
         "num_queries_total": 2,
         "num_queries_evaluated": 1,
+        "num_queries_without_expected_source": 1,
         "num_queries_without_expected_sources": 1,
         "k": 5,
         "hit_at_k": 1.0,
@@ -115,11 +121,114 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
     assert results[1]["mrr"] is None
 
 
+def test_validate_dataset_examples_reports_expected_source_coverage() -> None:
+    summary = validate_dataset_examples(
+        [
+            RetrievalEvalExample(
+                id="q1",
+                question="question 1",
+                expected_source_documents=["projects.md"],
+            ),
+            RetrievalEvalExample(
+                id="q2",
+                question="question 2",
+                expected_source_documents=["skills.md"],
+            ),
+            RetrievalEvalExample(
+                id="q3",
+                question="question 3",
+                expected_source_documents=[],
+            ),
+        ],
+        min_expected_source_coverage=0.60,
+    )
+
+    assert summary.total_queries == 3
+    assert summary.queries_with_expected_sources == 2
+    assert summary.queries_without_expected_sources == 1
+    assert summary.missing_expected_source_ids == ["q3"]
+    assert summary.expected_source_coverage == pytest.approx(2 / 3)
+    assert format_dataset_validation_summary(summary) == "\n".join(
+        [
+            "Retrieval eval dataset validation",
+            "---------------------------------",
+            "total_queries: 3",
+            "queries_with_expected_sources: 2",
+            "queries_without_expected_sources: 1",
+            "queries_missing_expected_sources: q3",
+        ]
+    )
+
+
+def test_validate_dataset_examples_fails_when_coverage_is_too_low() -> None:
+    with pytest.raises(RetrievalEvalDatasetValidationError) as exc_info:
+        validate_dataset_examples(
+            [
+                RetrievalEvalExample(
+                    id="q1",
+                    question="question 1",
+                    expected_source_documents=["projects.md"],
+                ),
+                RetrievalEvalExample(
+                    id="q2",
+                    question="question 2",
+                    expected_source_documents=[],
+                ),
+                RetrievalEvalExample(
+                    id="q3",
+                    question="question 3",
+                    expected_source_documents=[],
+                ),
+            ],
+            min_expected_source_coverage=0.75,
+        )
+
+    assert str(exc_info.value) == (
+        "Retrieval eval dataset is not valid: 2 of 3 queries are missing "
+        "expected_source_documents."
+    )
+
+
+def test_load_and_validate_dataset_reads_examples_from_jsonl(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "id": "q1",
+                        "question": "question 1",
+                        "expected_source_documents": ["projects.md"],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "id": "q2",
+                        "question": "question 2",
+                        "expected_source_documents": ["skills.md"],
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    examples, validation_summary = load_and_validate_dataset(
+        dataset_path,
+        min_expected_source_coverage=1.0,
+    )
+
+    assert [example.id for example in examples] == ["q1", "q2"]
+    assert validation_summary.queries_without_expected_sources == 0
+
+
 def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) -> None:
     output_dir = create_output_directory(tmp_path, timestamp_label="2026-07-02_203000")
     summary = {
         "num_queries_total": 1,
         "num_queries_evaluated": 1,
+        "num_queries_without_expected_source": 0,
         "num_queries_without_expected_sources": 0,
         "k": 5,
         "hit_at_k": 1.0,
@@ -228,6 +337,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
         summary={
             "num_queries_total": 2,
             "num_queries_evaluated": 1,
+            "num_queries_without_expected_source": 1,
             "num_queries_without_expected_sources": 1,
             "hit_at_k": 1.0,
             "recall_at_k": 1.0,
@@ -269,6 +379,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
         {
             "num_queries_total": 2,
             "num_queries_evaluated": 1,
+            "num_queries_without_expected_source": 1,
             "num_queries_without_expected_sources": 1,
             "hit_at_k": 1.0,
             "recall_at_k": 1.0,
@@ -314,6 +425,8 @@ def test_evaluate_examples_for_k_values_reports_multi_k_summary() -> None:
     assert retrieval_service.calls == [("question 1", 5), ("question 2", 5)]
     assert summary["k"] == 5
     assert summary["k_values"] == [1, 3, 5]
+    assert summary["num_queries_evaluated"] == 2
+    assert summary["num_queries_without_expected_source"] == 0
     assert summary["metrics_by_k"]["1"]["recall_at_k"] == 0.5
     assert summary["metrics_by_k"]["3"]["recall_at_k"] == 1.0
     assert summary["mrr"] == 0.75

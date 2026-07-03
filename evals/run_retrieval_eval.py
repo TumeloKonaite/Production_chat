@@ -28,6 +28,7 @@ from evals.metrics.retrieval_metrics import (
 
 DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "portfolio_eval_dataset.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results" / "retrieval"
+DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE = 0.95
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,24 @@ class RetrievalEvalExample:
     id: str
     question: str
     expected_source_documents: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalDatasetValidationSummary:
+    total_queries: int
+    queries_with_expected_sources: int
+    queries_without_expected_sources: int
+    missing_expected_source_ids: list[str]
+
+    @property
+    def expected_source_coverage(self) -> float:
+        if self.total_queries == 0:
+            return 1.0
+        return self.queries_with_expected_sources / self.total_queries
+
+
+class RetrievalEvalDatasetValidationError(ValueError):
+    """Raised when the retrieval evaluation dataset is missing too many expected sources."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,6 +78,15 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_DIR,
         help="Directory where retrieval evaluation artifacts will be written.",
     )
+    parser.add_argument(
+        "--min-expected-source-coverage",
+        type=float,
+        default=DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+        help=(
+            "Minimum fraction of dataset rows that must include expected_source_documents "
+            "before evaluation runs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -82,6 +110,63 @@ def load_dataset(path: Path) -> list[RetrievalEvalExample]:
     return examples
 
 
+def load_and_validate_dataset(
+    path: Path,
+    *,
+    min_expected_source_coverage: float = DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+) -> tuple[list[RetrievalEvalExample], RetrievalDatasetValidationSummary]:
+    examples = load_dataset(path)
+    validation_summary = validate_dataset_examples(
+        examples,
+        min_expected_source_coverage=min_expected_source_coverage,
+    )
+    return examples, validation_summary
+
+
+def validate_dataset_examples(
+    examples: list[RetrievalEvalExample],
+    *,
+    min_expected_source_coverage: float = DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+) -> RetrievalDatasetValidationSummary:
+    if not 0.0 <= min_expected_source_coverage <= 1.0:
+        raise ValueError("--min-expected-source-coverage must be between 0.0 and 1.0.")
+
+    missing_expected_source_ids = [
+        example.id for example in examples if not example.expected_source_documents
+    ]
+    summary = RetrievalDatasetValidationSummary(
+        total_queries=len(examples),
+        queries_with_expected_sources=len(examples) - len(missing_expected_source_ids),
+        queries_without_expected_sources=len(missing_expected_source_ids),
+        missing_expected_source_ids=missing_expected_source_ids,
+    )
+
+    if summary.expected_source_coverage < min_expected_source_coverage:
+        raise RetrievalEvalDatasetValidationError(
+            "Retrieval eval dataset is not valid: "
+            f"{summary.queries_without_expected_sources} of {summary.total_queries} queries "
+            "are missing expected_source_documents."
+        )
+
+    return summary
+
+
+def format_dataset_validation_summary(summary: RetrievalDatasetValidationSummary) -> str:
+    lines = [
+        "Retrieval eval dataset validation",
+        "---------------------------------",
+        f"total_queries: {summary.total_queries}",
+        f"queries_with_expected_sources: {summary.queries_with_expected_sources}",
+        f"queries_without_expected_sources: {summary.queries_without_expected_sources}",
+    ]
+    if summary.missing_expected_source_ids:
+        lines.append(
+            "queries_missing_expected_sources: "
+            + ", ".join(summary.missing_expected_source_ids)
+        )
+    return "\n".join(lines)
+
+
 def evaluate_examples(
     examples: list[RetrievalEvalExample],
     retrieval_service: RetrievalService,
@@ -96,6 +181,7 @@ def evaluate_examples(
     return {
         "num_queries_total": summary["num_queries_total"],
         "num_queries_evaluated": summary["num_queries_evaluated"],
+        "num_queries_without_expected_source": summary["num_queries_without_expected_source"],
         "num_queries_without_expected_sources": summary["num_queries_without_expected_sources"],
         "k": k,
         "hit_at_k": summary["hit_at_k"],
@@ -182,12 +268,13 @@ def evaluate_examples_for_k_values(
         )
 
     num_queries_total = len(examples)
-    num_queries_evaluated = len(aggregate_hits)
+    num_queries_evaluated = len(aggregate_mrrs)
     num_queries_without_expected_sources = num_queries_total - num_queries_evaluated
 
     summary = {
         "num_queries_total": num_queries_total,
         "num_queries_evaluated": num_queries_evaluated,
+        "num_queries_without_expected_source": num_queries_without_expected_sources,
         "num_queries_without_expected_sources": num_queries_without_expected_sources,
         "k": max_k,
         "k_values": normalized_k_values,
@@ -314,7 +401,15 @@ def main() -> None:
     tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
 
     retrieval_service = RetrievalService(settings=settings)
-    examples = load_dataset(dataset_path)
+    try:
+        examples, validation_summary = load_and_validate_dataset(
+            dataset_path,
+            min_expected_source_coverage=args.min_expected_source_coverage,
+        )
+    except (RetrievalEvalDatasetValidationError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(format_dataset_validation_summary(validation_summary))
     summary, results = evaluate_examples(examples, retrieval_service, k=top_k)
     config = build_run_config(
         settings=settings,
@@ -392,6 +487,9 @@ def log_run_to_tracker(
             {
                 "num_queries_total": summary["num_queries_total"],
                 "num_queries_evaluated": summary["num_queries_evaluated"],
+                "num_queries_without_expected_source": summary[
+                    "num_queries_without_expected_source"
+                ],
                 "num_queries_without_expected_sources": summary[
                     "num_queries_without_expected_sources"
                 ],
