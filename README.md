@@ -61,13 +61,18 @@ app/
       service.py
 evals/
   README.md
+  configs/
+    retrieval_sweep.yaml
   datasets/
     model_eval_dataset.jsonl
     portfolio_eval_dataset.jsonl
     prompt_eval_questions.jsonl
   results/
+  retrieval_eval_runner.py
   run_model_eval.py
   run_rag_eval.py
+  run_retrieval_eval.py
+  run_retrieval_sweep.py
 alembic/
   versions/
 frontend/
@@ -562,6 +567,54 @@ python evals/run_retrieval_eval.py --k 5
 
 The retrieval artifact payload includes the embedding provider, embedding model, embedding dimension, and chunking config used for that run.
 
+To compare multiple retrieval configurations in one command, use the sweep runner with a YAML config:
+
+```bash
+python evals/run_retrieval_sweep.py --config evals/configs/retrieval_sweep.yaml
+```
+
+The sample sweep config defines one run per experiment:
+
+```yaml
+experiments:
+  - name: retrieval-vector-k3
+    retriever_type: vector
+    top_k: 3
+
+  - name: retrieval-vector-k5
+    retriever_type: vector
+    top_k: 5
+
+  - name: retrieval-vector-k10
+    retriever_type: vector
+    top_k: 10
+
+  - name: retrieval-keyword-k5
+    retriever_type: keyword
+    top_k: 5
+```
+
+Optional per-experiment overrides:
+
+- `embedding_provider`
+- `embedding_model`
+- `embedding_dimension`
+- `chunk_size`
+- `chunk_overlap`
+
+Each sweep experiment logs as its own MLflow or DagsHub-backed MLflow run and records:
+
+- `retriever_type`
+- `top_k`
+- `embedding_provider`
+- `embedding_model`
+- `embedding_dimension`
+- `dataset_path`
+- `git_commit_sha`
+- retrieval metrics including `mrr`, `recall_at_k`, `mean_precision_at_k`, `hit_at_k`, and query counts
+
+Sweep artifacts are written under `evals/results/retrieval_sweeps/`. Each run gets its own artifact directory, and the sweep root also includes a manifest plus comparison JSON and CSV outputs.
+
 To compare multiple chunking strategies without editing code:
 
 ```bash
@@ -586,4 +639,10 @@ When `ENABLE_MLFLOW_TRACKING=true`, the runners log one MLflow run per evaluated
 
 ```bash
 pytest
+```
+
+Targeted eval checks for the retrieval runners:
+
+```bash
+PYTHONPATH=. pytest tests/evals/test_retrieval_eval_runner.py tests/evals/test_retrieval_sweep_runner.py tests/test_embedding_experiment_script.py
 ```

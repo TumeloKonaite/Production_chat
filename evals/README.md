@@ -217,3 +217,28 @@ Operational note:
 - Each configured run still has to match the current pgvector storage
   dimension. If a run's configured `dimension` does not match the database
   vector column, the runner fails fast instead of mixing incompatible indexes.
+
+## Retrieval Sweep Runner
+
+Use `evals/run_retrieval_sweep.py` to compare multiple retrieval configurations
+against the same dataset without rerunning the single-run CLI manually.
+
+Example config:
+
+```text
+evals/configs/retrieval_sweep.yaml
+```
+
+Example command:
+
+```text
+python evals/run_retrieval_sweep.py --config evals/configs/retrieval_sweep.yaml
+```
+
+Operational notes:
+
+- Each experiment in the YAML config becomes a separate MLflow run.
+- The sweep reuses the shared retrieval eval runner and does not duplicate the
+  retrieval metric calculation logic.
+- The runner writes per-experiment artifacts plus sweep-level comparison JSON
+  and CSV outputs under `evals/results/retrieval_sweeps/`.

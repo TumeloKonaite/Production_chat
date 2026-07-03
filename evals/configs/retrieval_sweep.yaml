@@ -1,0 +1,16 @@
+experiments:
+  - name: retrieval-vector-k3
+    retriever_type: vector
+    top_k: 3
+
+  - name: retrieval-vector-k5
+    retriever_type: vector
+    top_k: 5
+
+  - name: retrieval-vector-k10
+    retriever_type: vector
+    top_k: 10
+
+  - name: retrieval-keyword-k5
+    retriever_type: keyword
+    top_k: 5
