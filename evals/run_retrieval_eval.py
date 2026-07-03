@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings, get_settings
+from app.infrastructure.tracking import create_experiment_tracker
 from app.services.retrieval import RetrievalService
 from evals.metrics.retrieval_metrics import (
     first_relevant_rank,
@@ -43,8 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--k",
         type=int,
-        default=5,
-        help="Retrieval top-k used during evaluation.",
+        default=None,
+        help="Retrieval top-k used during evaluation. Defaults to RETRIEVAL_TOP_K.",
     )
     parser.add_argument(
         "--dataset",
@@ -227,15 +228,17 @@ def build_run_config(
     return {
         "timestamp": timestamp,
         "dataset_path": str(dataset_path),
+        "retriever_type": settings.retriever_type,
         "top_k": top_k,
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.knowledge_embedding_model,
         "embedding_dimension": settings.embedding_dimension,
-        "vector_store_type": "pgvector",
-        "retrieval_strategy": "similarity_search_with_relevance_scores",
+        "vector_store_type": "pgvector" if settings.retriever_type in {"vector", "hybrid"} else None,
+        "retrieval_strategy": settings.retriever_type,
         "chunk_size": resolved_chunk_size,
         "chunk_overlap": resolved_chunk_overlap,
         "settings_used_by_retriever": {
+            "retriever_type": settings.retriever_type,
             "default_retrieval_config": settings.default_retrieval_config,
             "retrieval_top_k": settings.retrieval_top_k,
             "retrieval_min_similarity": settings.retrieval_min_similarity,
@@ -299,22 +302,24 @@ def write_artifacts(
 
 def main() -> None:
     args = parse_args()
-    if args.k <= 0:
+    settings = get_settings()
+    top_k = args.k if args.k is not None else settings.retrieval_top_k
+    if top_k <= 0:
         raise SystemExit("--k must be greater than 0")
 
     dataset_path = args.dataset.resolve()
     output_root = args.output_dir.resolve()
     timestamp = datetime.now().astimezone().replace(microsecond=0).isoformat()
     timestamp_label = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
 
-    settings = get_settings()
     retrieval_service = RetrievalService(settings=settings)
     examples = load_dataset(dataset_path)
-    summary, results = evaluate_examples(examples, retrieval_service, k=args.k)
+    summary, results = evaluate_examples(examples, retrieval_service, k=top_k)
     config = build_run_config(
         settings=settings,
         dataset_path=dataset_path,
-        top_k=args.k,
+        top_k=top_k,
         timestamp=timestamp,
         argv=sys.argv,
     )
@@ -326,11 +331,78 @@ def main() -> None:
         results=results,
         config=config,
     )
+    log_run_to_tracker(
+        tracker=tracker,
+        settings=settings,
+        dataset_path=dataset_path,
+        top_k=top_k,
+        summary=summary,
+        config=config,
+        artifact_paths=artifact_paths,
+        run_name=build_tracking_run_name(
+            retriever_type=settings.retriever_type,
+            top_k=top_k,
+            timestamp_label=timestamp_label,
+        ),
+    )
 
     print(json.dumps(summary, indent=2, ensure_ascii=True))
     print(f"Results JSON written to: {artifact_paths['results_json']}")
     print(f"Results CSV written to: {artifact_paths['results_csv']}")
     print(f"Config JSON written to: {artifact_paths['config_json']}")
+
+
+def build_tracking_run_name(*, retriever_type: str, top_k: int, timestamp_label: str) -> str:
+    return f"retrieval-{retriever_type}-k{top_k}-{timestamp_label}"
+
+
+def log_run_to_tracker(
+    *,
+    tracker,
+    settings: Settings,
+    dataset_path: Path,
+    top_k: int,
+    summary: dict[str, Any],
+    config: dict[str, Any],
+    artifact_paths: dict[str, Path],
+    run_name: str,
+) -> None:
+    if not tracker.enabled:
+        return
+
+    with tracker.run(run_name):
+        tracker.log_params(
+            {
+                "dataset_name": dataset_path.name,
+                "dataset_path": str(dataset_path),
+                "retriever_type": settings.retriever_type,
+                "retrieval_config": settings.default_retrieval_config,
+                "top_k": top_k,
+                "embedding_provider": settings.embedding_provider,
+                "embedding_model": settings.knowledge_embedding_model,
+                "embedding_dimension": settings.embedding_dimension,
+                "knowledge_collection_name": settings.knowledge_collection_name,
+                "chunk_size": config.get("chunk_size"),
+                "chunk_overlap": config.get("chunk_overlap"),
+                "retrieval_min_similarity": settings.retrieval_min_similarity,
+                "git_commit_sha": config.get("git_commit_sha"),
+            }
+        )
+        tracker.log_metrics(
+            {
+                "num_queries_total": summary["num_queries_total"],
+                "num_queries_evaluated": summary["num_queries_evaluated"],
+                "num_queries_without_expected_sources": summary[
+                    "num_queries_without_expected_sources"
+                ],
+                "hit_at_k": summary["hit_at_k"],
+                "recall_at_k": summary["recall_at_k"],
+                "mean_precision_at_k": summary["mean_precision_at_k"],
+                "mrr": summary["mrr"],
+            }
+        )
+        for artifact_path in artifact_paths.values():
+            tracker.log_artifact(artifact_path)
 
 
 def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
@@ -352,7 +424,7 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
-            row = dict(result)
+            row = {name: result.get(name) for name in fieldnames}
             row["expected_source_documents"] = json.dumps(
                 result["expected_source_documents"],
                 ensure_ascii=True,

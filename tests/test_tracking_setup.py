@@ -45,6 +45,7 @@ def build_test_settings(**overrides: object) -> Settings:
         "knowledge_collection_name": "personal_knowledge_base",
         "default_prompt_version": "v1_professional",
         "conversation_history_limit": 10,
+        "retriever_type": "vector",
         "retrieval_top_k": 5,
         "retrieval_min_similarity": 0.55,
         "default_retrieval_config": "default",

@@ -7,9 +7,11 @@ from app.services.retrieval import RetrievedChunk
 from evals.run_retrieval_eval import (
     RetrievalEvalExample,
     build_run_config,
+    build_tracking_run_name,
     create_output_directory,
     evaluate_examples,
     evaluate_examples_for_k_values,
+    log_run_to_tracker,
     write_artifacts,
 )
 
@@ -22,6 +24,36 @@ class FakeRetrievalService:
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         self.calls.append((query, top_k))
         return list(self._responses.get(query, []))
+
+
+class FakeTrackerRun:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+class FakeTracker:
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.run_names: list[str] = []
+        self.params: list[dict[str, object]] = []
+        self.metrics: list[dict[str, float | int]] = []
+        self.artifacts: list[Path] = []
+
+    def run(self, run_name: str) -> FakeTrackerRun:
+        self.run_names.append(run_name)
+        return FakeTrackerRun()
+
+    def log_params(self, params: dict[str, object]) -> None:
+        self.params.append(params)
+
+    def log_metrics(self, metrics: dict[str, float | int]) -> None:
+        self.metrics.append(metrics)
+
+    def log_artifact(self, artifact_path: Path) -> None:
+        self.artifacts.append(artifact_path)
 
 
 def build_chunk(*, chunk_id: str, source: str, similarity: float = 0.9) -> RetrievedChunk:
@@ -130,6 +162,7 @@ def test_build_run_config_captures_retrieval_settings() -> None:
         "Settings",
         (),
         {
+            "retriever_type": "vector",
             "embedding_provider": "hf",
             "knowledge_embedding_model": "all-MiniLM-L6-v2",
             "embedding_dimension": 384,
@@ -154,12 +187,96 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["embedding_provider"] == "hf"
     assert config["embedding_model"] == "all-MiniLM-L6-v2"
     assert config["embedding_dimension"] == 384
+    assert config["retriever_type"] == "vector"
     assert config["vector_store_type"] == "pgvector"
-    assert config["retrieval_strategy"] == "similarity_search_with_relevance_scores"
+    assert config["retrieval_strategy"] == "vector"
     assert config["chunk_size"] == 500
     assert config["chunk_overlap"] == 100
+    assert config["settings_used_by_retriever"]["retriever_type"] == "vector"
     assert config["settings_used_by_retriever"]["retrieval_min_similarity"] == 0.55
     assert "run_retrieval_eval.py" in config["python_command_used"]
+
+
+def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "retriever_type": "hybrid",
+            "default_retrieval_config": "default",
+            "embedding_provider": "hf",
+            "knowledge_embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
+            "knowledge_collection_name": "personal_knowledge_base",
+            "retrieval_min_similarity": 0.55,
+        },
+    )()
+    artifact_paths = {
+        "results_json": tmp_path / "results.json",
+        "results_csv": tmp_path / "results.csv",
+        "config_json": tmp_path / "config.json",
+    }
+    for path in artifact_paths.values():
+        path.write_text("{}", encoding="utf-8")
+
+    log_run_to_tracker(
+        tracker=tracker,
+        settings=settings,
+        dataset_path=Path("evals/datasets/portfolio_eval_dataset.jsonl"),
+        top_k=5,
+        summary={
+            "num_queries_total": 2,
+            "num_queries_evaluated": 1,
+            "num_queries_without_expected_sources": 1,
+            "hit_at_k": 1.0,
+            "recall_at_k": 1.0,
+            "mean_precision_at_k": 0.5,
+            "mrr": 1.0,
+        },
+        config={
+            "chunk_size": 500,
+            "chunk_overlap": 100,
+            "git_commit_sha": "abc123",
+        },
+        artifact_paths=artifact_paths,
+        run_name=build_tracking_run_name(
+            retriever_type="hybrid",
+            top_k=5,
+            timestamp_label="2026-07-03_145252",
+        ),
+    )
+
+    assert tracker.run_names == ["retrieval-hybrid-k5-2026-07-03_145252"]
+    assert tracker.params == [
+        {
+            "dataset_name": "portfolio_eval_dataset.jsonl",
+            "dataset_path": "evals\\datasets\\portfolio_eval_dataset.jsonl",
+            "retriever_type": "hybrid",
+            "retrieval_config": "default",
+            "top_k": 5,
+            "embedding_provider": "hf",
+            "embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
+            "knowledge_collection_name": "personal_knowledge_base",
+            "chunk_size": 500,
+            "chunk_overlap": 100,
+            "retrieval_min_similarity": 0.55,
+            "git_commit_sha": "abc123",
+        }
+    ]
+    assert tracker.metrics == [
+        {
+            "num_queries_total": 2,
+            "num_queries_evaluated": 1,
+            "num_queries_without_expected_sources": 1,
+            "hit_at_k": 1.0,
+            "recall_at_k": 1.0,
+            "mean_precision_at_k": 0.5,
+            "mrr": 1.0,
+        }
+    ]
+    assert tracker.artifacts == list(artifact_paths.values())
 
 
 def test_evaluate_examples_for_k_values_reports_multi_k_summary() -> None:

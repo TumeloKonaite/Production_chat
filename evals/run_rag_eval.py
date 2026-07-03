@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--top-k",
         type=int,
-        default=5,
-        help="Retrieval top-k used during evaluation.",
+        default=None,
+        help="Retrieval top-k used during evaluation. Defaults to RETRIEVAL_TOP_K.",
     )
     parser.add_argument(
         "--run-name",
@@ -98,6 +98,7 @@ def parse_args() -> argparse.Namespace:
 async def main() -> None:
     args = parse_args()
     settings = get_settings()
+    top_k = args.top_k if args.top_k is not None else settings.retrieval_top_k
     prompt_loader = PromptLoader(prompts_dir=DEFAULT_PROMPTS_DIR)
     llm_service = LLMService(settings=settings)
     retrieval_service = RetrievalService(settings=settings)
@@ -124,7 +125,8 @@ async def main() -> None:
         judge_prompt_template = args.judge_prompt.read_text(encoding="utf-8")
         retrieval_config = {
             "name": settings.default_retrieval_config,
-            "top_k": args.top_k,
+            "retriever_type": settings.retriever_type,
+            "top_k": top_k,
             "min_similarity": settings.retrieval_min_similarity,
             "embedding_provider": settings.embedding_provider,
             "embedding_model": settings.knowledge_embedding_model,
@@ -140,7 +142,7 @@ async def main() -> None:
             prompt_version=args.prompt_version,
             model_config_id=args.model,
             judge_model_config_id=args.judge_model,
-            top_k=args.top_k,
+            top_k=top_k,
             retrieval_config=retrieval_config,
             judge_prompt_template=judge_prompt_template,
             temperature=args.temperature,
@@ -177,7 +179,8 @@ async def main() -> None:
                         "judge_prompt_path": str(args.judge_prompt),
                         "retrieval_config": retrieval_config,
                         "temperature": args.temperature,
-                        "top_k": args.top_k,
+                        "top_k": top_k,
+                        "retriever_type": settings.retriever_type,
                         "min_similarity": settings.retrieval_min_similarity,
                         "embedding_provider": settings.embedding_provider,
                         "embedding_model": settings.knowledge_embedding_model,

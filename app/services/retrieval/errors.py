@@ -4,3 +4,7 @@ class EmbeddingConfigurationError(Exception):
 
 class VectorIndexConfigurationError(Exception):
     """Raised when the stored vector index is incompatible with the active embedding config."""
+
+
+class UnsupportedRetrieverError(Exception):
+    """Raised when the requested retriever type cannot be constructed."""
