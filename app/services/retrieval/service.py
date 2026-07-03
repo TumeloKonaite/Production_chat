@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 import re
 from typing import Any
 
@@ -9,52 +9,42 @@ from sqlalchemy import func, select, text
 
 from app.config import Settings
 from app.infrastructure.embeddings import EmbeddingDescriptor, create_embedding_provider
+from app.repositories import KnowledgeRepository
+from app.repositories.db.session import get_session_factory
 from app.repositories.models import KnowledgeChunk
-from app.services.retrieval.errors import VectorIndexConfigurationError
+from app.services.retrieval.errors import (
+    UnsupportedRetrieverError,
+    VectorIndexConfigurationError,
+)
+from app.services.retrieval.strategies import HybridRetriever, KeywordRetriever, VectorRetriever
+from app.services.retrieval.types import RetrievedChunk, Retriever
 
 VECTOR_TYPE_PATTERN = re.compile(r"vector\((\d+)\)")
 
 
-@dataclass(frozen=True, slots=True)
-class RetrievedChunk:
-    id: str
-    source: str
-    section: str
-    content: str
-    similarity: float
-    metadata: dict[str, object]
-
-
 class RetrievalService:
-    def __init__(self, settings: Settings, vectorstore: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        vectorstore: Any | None = None,
+        knowledge_repository: KnowledgeRepository | None = None,
+    ) -> None:
         self._settings = settings
         self._default_top_k = settings.retrieval_top_k
         self._min_similarity = settings.retrieval_min_similarity
+        self._retriever_type = settings.retriever_type
         self._embedding_descriptor = EmbeddingDescriptor(
             provider=settings.embedding_provider,
             model=settings.knowledge_embedding_model,
             dimension=settings.embedding_dimension,
         )
+        self._vectorstore = vectorstore
+        self._chunk_loader = self._build_chunk_loader(knowledge_repository)
+        self._retriever = self._build_retriever()
 
-        if vectorstore is not None:
-            self.vectorstore = vectorstore
-        else:
-            from langchain_postgres import PGVector
-
-            embedding_provider = create_embedding_provider(settings)
-            self.vectorstore = PGVector(
-                embeddings=embedding_provider,
-                collection_name=settings.knowledge_collection_name,
-                connection=settings.database_url,
-                embedding_length=settings.embedding_dimension,
-                collection_metadata=self.embedding_metadata,
-                use_jsonb=True,
-            )
-
-        self._ensure_vector_dimension_is_supported()
-        self.retriever = self.vectorstore.as_retriever(
-            search_kwargs={"k": self._default_top_k}
-        )
+    @property
+    def retriever_type(self) -> str:
+        return self._retriever_type
 
     @property
     def embedding_descriptor(self) -> EmbeddingDescriptor:
@@ -63,6 +53,22 @@ class RetrievalService:
     @property
     def embedding_metadata(self) -> dict[str, object]:
         return self._embedding_descriptor.as_metadata()
+
+    @property
+    def vectorstore(self) -> Any:
+        if self._vectorstore is None:
+            from langchain_postgres import PGVector
+
+            embedding_provider = create_embedding_provider(self._settings)
+            self._vectorstore = PGVector(
+                embeddings=embedding_provider,
+                collection_name=self._settings.knowledge_collection_name,
+                connection=self._settings.database_url,
+                embedding_length=self._settings.embedding_dimension,
+                collection_metadata=self.embedding_metadata,
+                use_jsonb=True,
+            )
+        return self._vectorstore
 
     def replace_all_chunks(self, chunks: list[KnowledgeChunk]) -> None:
         self._ensure_vector_dimension_is_supported()
@@ -88,15 +94,55 @@ class RetrievalService:
         self.vectorstore.add_documents(documents=documents, ids=[chunk.id for chunk in chunks])
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        normalized_query = query.strip()
-        if not normalized_query:
-            return []
+        return self._retriever.retrieve(query, top_k=top_k)
 
+    def _build_retriever(self) -> Retriever:
+        vector_retriever = VectorRetriever(
+            default_top_k=self._default_top_k,
+            search=self._run_vector_search,
+        )
+        if self._retriever_type == "vector":
+            return vector_retriever
+
+        keyword_retriever = KeywordRetriever(
+            default_top_k=self._default_top_k,
+            chunk_loader=self._chunk_loader,
+        )
+        if self._retriever_type == "keyword":
+            return keyword_retriever
+        if self._retriever_type == "hybrid":
+            return HybridRetriever(
+                default_top_k=self._default_top_k,
+                vector_retriever=vector_retriever,
+                keyword_retriever=keyword_retriever,
+            )
+
+        raise UnsupportedRetrieverError(
+            f"Unsupported retriever type: {self._retriever_type}."
+        )
+
+    def _build_chunk_loader(
+        self,
+        knowledge_repository: KnowledgeRepository | None,
+    ) -> Callable[[], Sequence[KnowledgeChunk]]:
+        if knowledge_repository is not None:
+            return lambda: knowledge_repository.list_all()
+
+        def load_chunks() -> Sequence[KnowledgeChunk]:
+            session = get_session_factory()()
+            try:
+                repository = KnowledgeRepository(session=session)
+                return repository.list_all()
+            finally:
+                session.close()
+
+        return load_chunks
+
+    def _run_vector_search(self, query: str, top_k: int) -> list[RetrievedChunk]:
         self._ensure_index_compatible()
-        limit = top_k or self._default_top_k
         results = self.vectorstore.similarity_search_with_relevance_scores(
-            normalized_query,
-            k=limit,
+            query,
+            k=top_k,
         )
 
         retrieved_chunks: list[RetrievedChunk] = []

@@ -173,6 +173,7 @@ def build_test_settings(*, default_prompt_version: str = "v1_professional") -> S
         knowledge_collection_name="personal_knowledge_base",
         default_prompt_version=default_prompt_version,
         conversation_history_limit=10,
+        retriever_type="vector",
         retrieval_top_k=5,
         retrieval_min_similarity=0.55,
         default_retrieval_config="default",
@@ -517,10 +518,21 @@ def test_chat_injects_retrieved_context_into_system_prompt(tmp_path) -> None:
     assert "Do not invent experience, projects, employers, dates, tools, certifications, or achievements." in fake_llm.system_prompts[0]
 
 
-def test_chat_keyword_boost_prefers_project_name_matches_over_semantic_fallback(tmp_path) -> None:
+def test_chat_uses_retrieval_service_results_for_non_broad_queries(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="BeautyVerse is Tumelo's beauty services marketplace.")
-    fake_retrieval = FakeRetrievalService([])
-    client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
+    fake_retrieval = FakeRetrievalService(
+        [
+            build_retrieved_chunk(
+                source="projects.md",
+                section="BeautyVerse - Beauty Services Marketplace",
+                content=(
+                    "BeautyVerse is a marketplace and full-stack web application that enables "
+                    "providers to manage service listings while customers browse beauty services."
+                ),
+            )
+        ]
+    )
+    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm, fake_retrieval)
     store_knowledge_chunk(
         session_factory,
         source="experience.md",
@@ -547,6 +559,7 @@ def test_chat_keyword_boost_prefers_project_name_matches_over_semantic_fallback(
     assert response.status_code == 200
     assert response.json()["message"] == "BeautyVerse is Tumelo's beauty services marketplace."
     assert len(fake_llm.calls) == 1
+    assert retrieval_service.calls == [("Tell me about Tumelo's BeautyVerse project", 5)]
     assert "BeautyVerse - Beauty Services Marketplace" in fake_llm.system_prompts[0]
     assert "Engineering Experience Themes" not in fake_llm.system_prompts[0]
 

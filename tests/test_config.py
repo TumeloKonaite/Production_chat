@@ -9,6 +9,7 @@ from app.config import (
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
+    SUPPORTED_RETRIEVER_TYPES,
     get_settings,
 )
 
@@ -44,11 +45,15 @@ def test_get_settings_uses_custom_openai_base_url(monkeypatch: pytest.MonkeyPatc
 def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CHUNK_SIZE", raising=False)
     monkeypatch.delenv("CHUNK_OVERLAP", raising=False)
+    monkeypatch.delenv("RETRIEVER_TYPE", raising=False)
+    monkeypatch.delenv("RETRIEVAL_TOP_K", raising=False)
 
     settings = get_settings()
 
     assert settings.knowledge_chunk_size == DEFAULT_KNOWLEDGE_CHUNK_SIZE
     assert settings.knowledge_chunk_overlap == DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
+    assert settings.retriever_type == "vector"
+    assert settings.retrieval_top_k == 5
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +72,8 @@ def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.Monkey
         ("CHUNK_SIZE", "0", "CHUNK_SIZE must be greater than 0."),
         ("CHUNK_OVERLAP", "-1", "CHUNK_OVERLAP must be greater than or equal to 0."),
         ("CHUNK_SIZE", "abc", "CHUNK_SIZE must be an integer."),
+        ("RETRIEVAL_TOP_K", "0", "RETRIEVAL_TOP_K must be greater than 0."),
+        ("RETRIEVAL_TOP_K", "abc", "RETRIEVAL_TOP_K must be an integer."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(
@@ -80,6 +87,16 @@ def test_get_settings_rejects_invalid_chunking_values(
     monkeypatch.setenv(env_name, env_value)
 
     with pytest.raises(ValueError, match=expected_message):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_retriever_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RETRIEVER_TYPE", "semantic")
+
+    supported_values = ", ".join(sorted(SUPPORTED_RETRIEVER_TYPES))
+    with pytest.raises(ValueError, match=f"RETRIEVER_TYPE must be one of: {supported_values}."):
         get_settings()
 
 

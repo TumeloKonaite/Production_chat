@@ -40,8 +40,12 @@ def get_knowledge_repository(
 
 def get_retrieval_service(
     settings: Settings = Depends(get_app_settings),
+    knowledge_repository: KnowledgeRepository = Depends(get_knowledge_repository),
 ) -> RetrievalService:
-    return RetrievalService(settings=settings)
+    return RetrievalService(
+        settings=settings,
+        knowledge_repository=knowledge_repository,
+    )
 
 
 def get_chat_service(

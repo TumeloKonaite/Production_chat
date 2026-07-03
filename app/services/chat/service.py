@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 import uuid
 
 from app.config import Settings
@@ -27,61 +26,6 @@ from app.services.chat.errors import (
 )
 from app.services.llm.service import LLMChatMessage, LLMGeneratedResponse, TokenUsage
 from app.services.retrieval import RetrievedChunk, RetrievalService
-
-_QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
-_KEYWORD_STOPWORDS = {
-    "a",
-    "about",
-    "an",
-    "and",
-    "are",
-    "background",
-    "build",
-    "built",
-    "can",
-    "could",
-    "details",
-    "did",
-    "do",
-    "does",
-    "experience",
-    "explain",
-    "for",
-    "from",
-    "give",
-    "has",
-    "have",
-    "help",
-    "his",
-    "how",
-    "i",
-    "in",
-    "is",
-    "it",
-    "me",
-    "more",
-    "of",
-    "on",
-    "or",
-    "please",
-    "project",
-    "projects",
-    "tell",
-    "that",
-    "the",
-    "this",
-    "tumelo",
-    "us",
-    "was",
-    "what",
-    "which",
-    "who",
-    "with",
-    "work",
-    "worked",
-    "you",
-}
-
 
 @dataclass(frozen=True, slots=True)
 class ChatReply:
@@ -356,9 +300,6 @@ class ChatService:
             broad_project_chunks = self._retrieve_broad_project_chunks(message)
             if broad_project_chunks:
                 return broad_project_chunks
-            keyword_chunks = self._retrieve_keyword_chunks(message)
-            if keyword_chunks:
-                return keyword_chunks
             return self.retrieval_service.retrieve(message, top_k=self.retrieval_top_k)
         except KnowledgeRepositoryError as exc:
             raise ChatServiceError() from exc
@@ -398,86 +339,6 @@ class ChatService:
             )
             for index, chunk in enumerate(selected_chunks)
         ]
-
-    def _retrieve_keyword_chunks(self, message: str) -> list[RetrievedChunk]:
-        query_terms = self._extract_keyword_query_terms(message)
-        if not query_terms:
-            return []
-
-        scored_chunks = []
-        for chunk in self.knowledge_repository.list_all():
-            score = self._score_keyword_chunk(
-                section=chunk.section,
-                content=chunk.content,
-                query_terms=query_terms,
-            )
-            if score <= 0:
-                continue
-            scored_chunks.append((score, chunk))
-
-        if not scored_chunks:
-            return []
-
-        scored_chunks.sort(
-            key=lambda item: (
-                item[0],
-                item[1].source == "projects.md",
-                len(item[1].content),
-            ),
-            reverse=True,
-        )
-        selected_chunks = scored_chunks[: self.retrieval_top_k]
-        return [
-            RetrievedChunk(
-                id=chunk.id,
-                source=chunk.source,
-                section=chunk.section,
-                content=chunk.content,
-                similarity=score,
-                metadata={
-                    **chunk.chunk_metadata,
-                    "chunk_id": chunk.id,
-                    "source": chunk.source,
-                    "source_type": chunk.source_type,
-                    "section": chunk.section,
-                },
-            )
-            for score, chunk in selected_chunks
-        ]
-
-    def _extract_keyword_query_terms(self, message: str) -> list[str]:
-        tokens = _QUERY_TOKEN_RE.findall(message.casefold())
-        return [
-            token
-            for token in tokens
-            if len(token) >= 3 and token not in _KEYWORD_STOPWORDS
-        ]
-
-    def _score_keyword_chunk(
-        self,
-        *,
-        section: str,
-        content: str,
-        query_terms: list[str],
-    ) -> float:
-        normalized_section_tokens = set(_QUERY_TOKEN_RE.findall(section.casefold()))
-        normalized_content_tokens = set(_QUERY_TOKEN_RE.findall(content.casefold()))
-
-        section_matches = [term for term in query_terms if term in normalized_section_tokens]
-        content_matches = [term for term in query_terms if term in normalized_content_tokens]
-        total_matches = len(set(section_matches + content_matches))
-        if total_matches == 0:
-            return 0.0
-
-        score = 0.0
-        score += len(section_matches) * 0.45
-        score += len(content_matches) * 0.25
-        if section_matches and len(section_matches) == len(query_terms):
-            score += 0.35
-        if content_matches and len(content_matches) == len(query_terms):
-            score += 0.2
-
-        return min(score, 0.99)
 
     def _log_retrieval(
         self,

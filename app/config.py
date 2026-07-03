@@ -12,6 +12,7 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
+SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class Settings:
     knowledge_collection_name: str
     default_prompt_version: str
     conversation_history_limit: int
+    retriever_type: str
     retrieval_top_k: int
     retrieval_min_similarity: float
     default_retrieval_config: str
@@ -77,6 +79,19 @@ def _get_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
     if minimum is not None and value < minimum:
         comparator = "greater than 0" if minimum == 1 else f"greater than or equal to {minimum}"
         raise ValueError(f"{name} must be {comparator}.")
+
+    return value
+
+
+def _get_retriever_type_env(name: str, default: str) -> str:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    value = raw_value.strip().casefold()
+    if value not in SUPPORTED_RETRIEVER_TYPES:
+        supported_values = ", ".join(sorted(SUPPORTED_RETRIEVER_TYPES))
+        raise ValueError(f"{name} must be one of: {supported_values}.")
 
     return value
 
@@ -143,7 +158,8 @@ def get_settings() -> Settings:
             )
         ),
         conversation_history_limit=int(os.getenv("CONVERSATION_HISTORY_LIMIT", "10")),
-        retrieval_top_k=int(os.getenv("RETRIEVAL_TOP_K", "5")),
+        retriever_type=_get_retriever_type_env("RETRIEVER_TYPE", "vector"),
+        retrieval_top_k=_get_int_env("RETRIEVAL_TOP_K", 5, minimum=1),
         retrieval_min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.55")),
         default_retrieval_config=os.getenv("DEFAULT_RETRIEVAL_CONFIG", "default"),
         enable_mlflow_tracking=_parse_bool(

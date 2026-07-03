@@ -139,6 +139,7 @@ async def main() -> None:
                     "model_name": aggregate.model_name,
                     "prompt_version": args.prompt_version,
                     "retrieval_config": retrieval_config,
+                    "retriever_type": settings.retriever_type,
                     "eval_dataset_version": args.dataset_version,
                     "temperature": args.temperature,
                     "top_k": retrieval_top_k,
@@ -190,6 +191,7 @@ async def main() -> None:
                 {
                     "prompt_version": args.prompt_version,
                     "retrieval_config": retrieval_config,
+                    "retriever_type": settings.retriever_type,
                     "eval_dataset_version": args.dataset_version,
                     "models": ",".join(args.models),
                 }

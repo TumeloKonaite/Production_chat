@@ -3,7 +3,11 @@ from __future__ import annotations
 from langchain_core.documents import Document
 
 from app.repositories.models import KnowledgeChunk
-from app.services.retrieval import RetrievalService, VectorIndexConfigurationError
+from app.services.retrieval import (
+    RetrievalService,
+    UnsupportedRetrieverError,
+    VectorIndexConfigurationError,
+)
 
 
 class FakeVectorStore:
@@ -83,11 +87,20 @@ class MetadataAwareVectorStore(FakeVectorStore):
         return int(self._vector_dimension.removeprefix("vector(").removesuffix(")"))
 
 
-def build_settings() -> object:
+class FakeKnowledgeRepository:
+    def __init__(self, chunks: list[KnowledgeChunk]) -> None:
+        self._chunks = list(chunks)
+
+    def list_all(self) -> list[KnowledgeChunk]:
+        return list(self._chunks)
+
+
+def build_settings(*, retriever_type: str = "vector") -> object:
     return type(
         "Settings",
         (),
         {
+            "retriever_type": retriever_type,
             "retrieval_top_k": 5,
             "retrieval_min_similarity": 0.6,
             "embedding_provider": "hf",
@@ -140,6 +153,97 @@ def test_retrieval_service_returns_only_relevant_chunks() -> None:
     assert results[0].section == "Projects"
     assert results[0].content == "Tumelo built a FastAPI retrieval chatbot."
     assert results[0].similarity == 0.91
+
+
+def test_retrieval_service_keyword_strategy_prefers_project_name_matches() -> None:
+    retrieval_service = RetrievalService(
+        settings=build_settings(retriever_type="keyword"),
+        knowledge_repository=FakeKnowledgeRepository(
+            [
+                KnowledgeChunk(
+                    id="chunk-1",
+                    source="experience.md",
+                    source_type="markdown",
+                    section="Engineering Experience Themes",
+                    content="Tumelo has experience building production-grade AI systems.",
+                    chunk_metadata={},
+                ),
+                KnowledgeChunk(
+                    id="chunk-2",
+                    source="projects.md",
+                    source_type="markdown",
+                    section="BeautyVerse - Beauty Services Marketplace",
+                    content="BeautyVerse is a marketplace for beauty service providers and customers.",
+                    chunk_metadata={},
+                ),
+            ]
+        ),
+    )
+
+    results = retrieval_service.retrieve("Tell me about Tumelo's BeautyVerse project")
+
+    assert retrieval_service.retriever_type == "keyword"
+    assert [chunk.id for chunk in results] == ["chunk-2"]
+    assert results[0].source == "projects.md"
+    assert "BeautyVerse" in results[0].section
+
+
+def test_retrieval_service_hybrid_strategy_merges_and_deduplicates_results() -> None:
+    vectorstore = FakeVectorStore()
+    vectorstore.results = [
+        (
+            Document(
+                page_content="BeautyVerse is a marketplace for beauty services.",
+                metadata={
+                    "chunk_id": "chunk-2",
+                    "source": "projects.md",
+                    "section": "BeautyVerse - Beauty Services Marketplace",
+                },
+            ),
+            0.83,
+        ),
+        (
+            Document(
+                page_content="Tumelo has built production-grade AI systems.",
+                metadata={
+                    "chunk_id": "chunk-1",
+                    "source": "experience.md",
+                    "section": "Engineering Experience Themes",
+                },
+            ),
+            0.79,
+        ),
+    ]
+    retrieval_service = RetrievalService(
+        settings=build_settings(retriever_type="hybrid"),
+        vectorstore=vectorstore,
+        knowledge_repository=FakeKnowledgeRepository(
+            [
+                KnowledgeChunk(
+                    id="chunk-2",
+                    source="projects.md",
+                    source_type="markdown",
+                    section="BeautyVerse - Beauty Services Marketplace",
+                    content="BeautyVerse is a marketplace for beauty service providers and customers.",
+                    chunk_metadata={},
+                ),
+                KnowledgeChunk(
+                    id="chunk-3",
+                    source="skills.md",
+                    source_type="markdown",
+                    section="BeautyVerse Skills",
+                    content="Tumelo used FastAPI, retrieval, and embeddings in BeautyVerse.",
+                    chunk_metadata={},
+                ),
+            ]
+        ),
+    )
+
+    results = retrieval_service.retrieve("Tell me about Tumelo's BeautyVerse project", top_k=3)
+
+    assert retrieval_service.retriever_type == "hybrid"
+    assert [chunk.id for chunk in results] == ["chunk-2", "chunk-3", "chunk-1"]
+    assert results[0].similarity <= 0.99
 
 
 def test_replace_all_chunks_records_embedding_metadata_on_vector_documents() -> None:
@@ -202,7 +306,8 @@ def test_retrieval_service_rejects_vector_dimension_mismatches() -> None:
     )
 
     try:
-        RetrievalService(settings=build_settings(), vectorstore=vectorstore)
+        retrieval_service = RetrievalService(settings=build_settings(), vectorstore=vectorstore)
+        retrieval_service.retrieve("Tell me about the retrieval chatbot")
     except VectorIndexConfigurationError as exc:
         message = str(exc)
     else:
@@ -211,3 +316,14 @@ def test_retrieval_service_rejects_vector_dimension_mismatches() -> None:
     assert "Configured embedding dimension does not match the pgvector storage dimension" in message
     assert "Configured: 384" in message
     assert "Vector store: 1536" in message
+
+
+def test_retrieval_service_rejects_unsupported_retriever_type() -> None:
+    try:
+        RetrievalService(settings=build_settings(retriever_type="semantic"))
+    except UnsupportedRetrieverError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected UnsupportedRetrieverError")
+
+    assert message == "Unsupported retriever type: semantic."
