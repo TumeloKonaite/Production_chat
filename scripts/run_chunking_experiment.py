@@ -18,10 +18,12 @@ from app.repositories.db.session import get_engine, get_session_factory
 from app.services.retrieval import RetrievalService
 from evals.run_retrieval_eval import (
     DEFAULT_DATASET_PATH,
+    DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
     build_run_config,
     create_output_directory,
     evaluate_examples,
-    load_dataset,
+    format_dataset_validation_summary,
+    load_and_validate_dataset,
     write_artifacts,
 )
 
@@ -54,6 +56,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
         help="Directory where chunking experiment artifacts will be written.",
+    )
+    parser.add_argument(
+        "--min-expected-source-coverage",
+        type=float,
+        default=DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+        help=(
+            "Minimum fraction of dataset rows that must include expected_source_documents "
+            "before evaluation runs."
+        ),
     )
     return parser.parse_args()
 
@@ -191,7 +202,11 @@ def main() -> None:
     settings = get_settings()
     prepare_knowledge_ingestion_storage(get_engine())
     session_factory = get_session_factory()
-    examples = load_dataset(dataset_path)
+    examples, validation_summary = load_and_validate_dataset(
+        dataset_path,
+        min_expected_source_coverage=args.min_expected_source_coverage,
+    )
+    print(format_dataset_validation_summary(validation_summary))
     runs: list[dict[str, Any]] = []
 
     for chunk_size, chunk_overlap in chunk_configs:

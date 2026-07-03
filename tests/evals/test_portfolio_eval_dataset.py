@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.domain.evals import RagEvalDatasetExample
 from app.services.evals.rag_eval_service import RagEvalService
+from evals.run_retrieval_eval import validate_dataset_examples
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "portfolio_eval_dataset.jsonl"
@@ -84,3 +85,37 @@ def test_portfolio_eval_dataset_rows_follow_the_documented_contract() -> None:
         if category == "unsupported":
             assert expected_behavior == "fallback"
             assert expected_source_documents == []
+
+
+def test_portfolio_eval_dataset_keeps_expected_source_coverage_high() -> None:
+    rows = _load_raw_rows()
+    summary = validate_dataset_examples(
+        [
+            RagEvalDatasetExample(
+                id=str(row["id"]),
+                question=str(row["question"]),
+                expected_source_documents=[
+                    str(item) for item in row.get("expected_source_documents", [])
+                ],
+                expected_answer_points=[
+                    str(item) for item in row.get("expected_answer_points", [])
+                ],
+                category=str(row["category"]),
+                difficulty=(
+                    str(row["difficulty"]) if row.get("difficulty") is not None else None
+                ),
+                notes=str(row["notes"]) if row.get("notes") is not None else None,
+                expected_behavior=(
+                    str(row["expected_behavior"])
+                    if row.get("expected_behavior") is not None
+                    else None
+                ),
+            )
+            for row in rows
+        ],
+        min_expected_source_coverage=0.95,
+    )
+
+    assert summary.total_queries == len(rows)
+    assert summary.queries_without_expected_sources <= 1
+    assert summary.missing_expected_source_ids == ["q_019"]

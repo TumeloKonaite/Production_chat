@@ -20,9 +20,11 @@ from app.repositories.db.session import get_engine, get_session_factory
 from app.services.retrieval import RetrievalService
 from evals.run_retrieval_eval import (
     DEFAULT_DATASET_PATH,
+    DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
     build_run_config,
     evaluate_examples_for_k_values,
-    load_dataset,
+    format_dataset_validation_summary,
+    load_and_validate_dataset,
 )
 
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results" / "embedding_experiments"
@@ -63,6 +65,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
         help="Directory where embedding experiment artifacts will be written.",
+    )
+    parser.add_argument(
+        "--min-expected-source-coverage",
+        type=float,
+        default=DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+        help=(
+            "Minimum fraction of dataset rows that must include expected_source_documents "
+            "before evaluation runs."
+        ),
     )
     return parser.parse_args()
 
@@ -123,9 +134,14 @@ def run_embedding_experiment_matrix(
     output_dir: Path,
     settings: Settings,
     argv: list[str],
+    min_expected_source_coverage: float = DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
 ) -> tuple[list[dict[str, Any]], dict[str, Path]]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    examples = load_dataset(dataset_path)
+    examples, validation_summary = load_and_validate_dataset(
+        dataset_path,
+        min_expected_source_coverage=min_expected_source_coverage,
+    )
+    print(format_dataset_validation_summary(validation_summary))
     session_factory = get_session_factory()
     runs_output_dir = output_dir / "runs"
     runs_output_dir.mkdir(parents=True, exist_ok=True)
@@ -405,6 +421,7 @@ def main() -> None:
         output_dir=experiment_output_dir,
         settings=settings,
         argv=sys.argv,
+        min_expected_source_coverage=args.min_expected_source_coverage,
     )
 
     best_row = rows[0]
