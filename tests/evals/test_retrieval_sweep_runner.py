@@ -140,6 +140,7 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
             "k": kwargs["top_k"],
             "hit_at_k": 1.0,
             "recall_at_k": 0.5,
+            "precision_at_k": 0.25,
             "mean_precision_at_k": 0.25,
             "mrr": 0.75,
         }
@@ -187,8 +188,11 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
     assert rows[0]["run_name"].startswith("retrieval-vector-k3-")
     assert rows[1]["run_name"].startswith("retrieval-keyword-k5-")
     assert rows[0]["run_name"] != rows[1]["run_name"]
-    assert artifact_paths["comparison_json"].exists()
-    assert artifact_paths["comparison_csv"].exists()
+    assert rows[0]["rank"] == 1
+    assert rows[0]["is_best"] is True
+    assert artifact_paths["summary_json"].exists()
+    assert artifact_paths["summary_csv"].exists()
+    assert artifact_paths["ranking_md"].exists()
     assert artifact_paths["manifest_json"].exists()
 
 
@@ -236,6 +240,7 @@ def test_format_retrieval_sweep_summary_renders_compact_table() -> None:
     )
 
     assert "run_name" in table
+    assert "rank" in table
     assert "retrieval-vector-k3-2026-07-03_170000" in table
     assert "0.396" in table
 

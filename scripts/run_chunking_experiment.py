@@ -13,18 +13,16 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import get_settings
+from app.infrastructure.tracking import create_experiment_tracker
 from app.knowledge.ingestion import ingest_knowledge, prepare_knowledge_ingestion_storage
 from app.repositories.db.session import get_engine, get_session_factory
 from app.services.retrieval import RetrievalService
 from evals.run_retrieval_eval import (
     DEFAULT_DATASET_PATH,
     DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
-    build_run_config,
-    create_output_directory,
-    evaluate_examples,
     format_dataset_validation_summary,
     load_and_validate_dataset,
-    write_artifacts,
+    run_retrieval_eval,
 )
 
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results" / "chunking_experiments"
@@ -110,15 +108,15 @@ def parse_chunk_configs(raw_configs: str) -> list[tuple[int, int]]:
 def build_comparison_rows(
     runs: list[dict[str, Any]],
     *,
-    primary_metric: str = "mrr",
+    primary_metric: str = "recall_at_k",
 ) -> list[dict[str, Any]]:
     ranked_runs = sorted(
         runs,
         key=lambda item: (
             _sort_metric(item.get(primary_metric)),
+            _sort_metric(item.get("mrr")),
+            _sort_metric(item.get("precision_at_k")),
             _sort_metric(item.get("hit_at_k")),
-            _sort_metric(item.get("recall_at_k")),
-            _sort_metric(item.get("mean_precision_at_k")),
         ),
         reverse=True,
     )
@@ -147,13 +145,17 @@ def write_comparison_artifacts(
     rows: list[dict[str, Any]],
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "chunking_comparison.json"
-    csv_path = output_dir / "chunking_comparison.csv"
+    json_path = output_dir / "chunking_experiment_summary.json"
+    csv_path = output_dir / "chunking_experiment_summary.csv"
+    table_path = output_dir / "chunking_experiment_ranking.md"
 
     payload = {
         "generated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
-        "primary_metric": "mrr",
-        "best_config": next((row for row in rows if row["is_best"]), None),
+        "ranking": {
+            "primary_metric": "recall_at_k",
+            "tiebreak_metrics": ["mrr", "precision_at_k", "hit_at_k"],
+        },
+        "best_configuration": next((row for row in rows if row["is_best"]), None),
         "runs": rows,
     }
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -166,11 +168,16 @@ def write_comparison_artifacts(
         "chunk_overlap",
         "documents_loaded",
         "chunks_indexed",
-        "k",
+        "embedding_model",
+        "retriever_type",
+        "top_k",
+        "query_rewriting",
+        "reranker",
         "hit_at_k",
         "recall_at_k",
-        "mean_precision_at_k",
+        "precision_at_k",
         "mrr",
+        "mlflow_run_id",
         "run_output_dir",
         "results_json",
         "results_csv",
@@ -182,7 +189,58 @@ def write_comparison_artifacts(
         for row in rows:
             writer.writerow({name: row.get(name) for name in fieldnames})
 
-    return {"comparison_json": json_path, "comparison_csv": csv_path}
+    table_path.write_text(format_ranked_summary_table(rows), encoding="utf-8")
+
+    return {
+        "summary_json": json_path,
+        "summary_csv": csv_path,
+        "ranking_md": table_path,
+    }
+
+
+def format_ranked_summary_table(rows: list[dict[str, Any]]) -> str:
+    headers = [
+        "rank",
+        "chunk_size",
+        "chunk_overlap",
+        "embedding_model",
+        "retriever_type",
+        "top_k",
+        "query_rewriting",
+        "reranker",
+        "recall_at_k",
+        "mrr",
+        "precision_at_k",
+    ]
+    rendered_rows = [
+        [
+            str(row.get("rank", "")),
+            str(row.get("chunk_size", "")),
+            str(row.get("chunk_overlap", "")),
+            str(row.get("embedding_model", "")),
+            str(row.get("retriever_type", "")),
+            str(row.get("top_k", "")),
+            str(row.get("query_rewriting", "")),
+            str(row.get("reranker", "")),
+            _format_metric(row.get("recall_at_k")),
+            _format_metric(row.get("mrr")),
+            _format_metric(row.get("precision_at_k")),
+        ]
+        for row in rows
+    ]
+    widths = [
+        max(len(header), *(len(rendered_row[index]) for rendered_row in rendered_rows))
+        for index, header in enumerate(headers)
+    ]
+
+    def render_row(values: list[str]) -> str:
+        cells = [value.ljust(widths[index]) for index, value in enumerate(values)]
+        return "| " + " | ".join(cells) + " |"
+
+    separator = "| " + " | ".join("-" * width for width in widths) + " |"
+    lines = [render_row(headers), separator]
+    lines.extend(render_row(rendered_row) for rendered_row in rendered_rows)
+    return "\n".join(lines) + "\n"
 
 
 def main() -> None:
@@ -200,6 +258,7 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     settings = get_settings()
+    tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
     prepare_knowledge_ingestion_storage(get_engine())
     session_factory = get_session_factory()
     examples, validation_summary = load_and_validate_dataset(
@@ -224,58 +283,130 @@ def main() -> None:
                 chunk_overlap=chunk_overlap,
             )
 
-        summary, results = evaluate_examples(examples, retrieval_service, k=args.k)
-        config = build_run_config(
+        run_result = run_retrieval_eval(
             settings=settings,
             dataset_path=dataset_path,
+            output_root=output_root,
             top_k=args.k,
-            timestamp=timestamp,
+            tracker=tracker,
             argv=sys.argv,
-            run_name=timestamp_label,
+            run_name=f"chunking-{chunk_size}-{chunk_overlap}-{timestamp_label}",
+            output_label=f"chunk_{chunk_size}_{chunk_overlap}",
+            timestamp=timestamp,
+            timestamp_label=timestamp_label,
+            examples=examples,
+            validation_summary=validation_summary,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
-        config["documents_loaded"] = len(documents)
-        config["chunks_indexed"] = sum(item.chunk_count for item in ingestion_results)
-
-        run_output_dir = create_output_directory(output_root, timestamp_label=timestamp_label)
-        artifact_paths = write_artifacts(
-            run_output_dir,
-            summary=summary,
-            results=results,
-            config=config,
-        )
+        chunks_indexed = sum(item.chunk_count for item in ingestion_results)
 
         runs.append(
             {
                 "chunk_size": chunk_size,
                 "chunk_overlap": chunk_overlap,
                 "documents_loaded": len(documents),
-                "chunks_indexed": sum(item.chunk_count for item in ingestion_results),
-                "k": summary["k"],
-                "hit_at_k": summary["hit_at_k"],
-                "recall_at_k": summary["recall_at_k"],
-                "mean_precision_at_k": summary["mean_precision_at_k"],
-                "mrr": summary["mrr"],
-                "run_output_dir": str(run_output_dir),
-                "results_json": str(artifact_paths["results_json"]),
-                "results_csv": str(artifact_paths["results_csv"]),
-                "config_json": str(artifact_paths["config_json"]),
+                "chunks_indexed": chunks_indexed,
+                "embedding_model": run_result.config.get("embedding_model"),
+                "retriever_type": run_result.config.get("retriever_type"),
+                "top_k": run_result.summary["k"],
+                "query_rewriting": run_result.config.get("query_rewriting"),
+                "reranker": run_result.config.get("reranker"),
+                "hit_at_k": run_result.summary["hit_at_k"],
+                "recall_at_k": run_result.summary["recall_at_k"],
+                "precision_at_k": run_result.summary["precision_at_k"],
+                "mrr": run_result.summary["mrr"],
+                "mlflow_run_id": run_result.mlflow_run_id,
+                "run_output_dir": str(run_result.output_dir),
+                "results_json": str(run_result.artifact_paths["results_json"]),
+                "results_csv": str(run_result.artifact_paths["results_csv"]),
+                "config_json": str(run_result.artifact_paths["config_json"]),
             }
         )
 
     comparison_rows = build_comparison_rows(runs)
     comparison_paths = write_comparison_artifacts(output_root, rows=comparison_rows)
+    _log_summary_to_tracker(
+        tracker=tracker,
+        run_name=f"chunking-experiment-summary-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        rows=comparison_rows,
+        artifact_paths=comparison_paths,
+        settings=settings,
+        top_k=args.k,
+    )
+    best_row = comparison_rows[0]
 
-    print(json.dumps(comparison_rows, indent=2, ensure_ascii=True))
-    print(f"Comparison JSON written to: {comparison_paths['comparison_json']}")
-    print(f"Comparison CSV written to: {comparison_paths['comparison_csv']}")
+    print()
+    print("Best chunking configuration")
+    print(
+        f"rank={best_row['rank']} chunk_size={best_row['chunk_size']} "
+        f"chunk_overlap={best_row['chunk_overlap']} "
+        f"recall_at_k={_format_metric(best_row.get('recall_at_k'))} "
+        f"mrr={_format_metric(best_row.get('mrr'))} "
+        f"precision_at_k={_format_metric(best_row.get('precision_at_k'))}"
+    )
+    print()
+    print(format_ranked_summary_table(comparison_rows), end="")
+    print(f"Summary JSON written to: {comparison_paths['summary_json']}")
+    print(f"Summary CSV written to: {comparison_paths['summary_csv']}")
+    print(f"Ranking table written to: {comparison_paths['ranking_md']}")
 
 
 def _sort_metric(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     return float("-inf")
+
+
+def _format_metric(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.3f}"
+    return ""
+
+
+def _log_summary_to_tracker(
+    *,
+    tracker,
+    run_name: str,
+    rows: list[dict[str, Any]],
+    artifact_paths: dict[str, Path],
+    settings,
+    top_k: int,
+) -> None:
+    if (
+        not tracker.enabled
+        or not rows
+        or not hasattr(tracker, "run")
+        or not hasattr(tracker, "log_params")
+        or not hasattr(tracker, "log_metrics")
+        or not hasattr(tracker, "log_artifact")
+    ):
+        return
+
+    best_row = rows[0]
+    with tracker.run(run_name):
+        tracker.log_params(
+            {
+                "workflow": "chunking_experiment",
+                "config_count": len(rows),
+                "embedding_model": settings.knowledge_embedding_model,
+                "retriever_type": settings.retriever_type,
+                "top_k": top_k,
+                "query_rewriting": settings.enable_query_rewriting,
+                "reranker": (
+                    settings.reranker_type if getattr(settings, "enable_reranking", False) else "none"
+                ),
+            }
+        )
+        tracker.log_metrics(
+            {
+                "best_recall_at_k": float(best_row.get("recall_at_k") or 0.0),
+                "best_mrr": float(best_row.get("mrr") or 0.0),
+                "best_precision_at_k": float(best_row.get("precision_at_k") or 0.0),
+            }
+        )
+        for artifact_path in artifact_paths.values():
+            tracker.log_artifact(artifact_path)
 
 
 if __name__ == "__main__":

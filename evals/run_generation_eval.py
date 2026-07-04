@@ -159,6 +159,8 @@ async def main() -> None:
                     "dataset_path": str(args.dataset),
                     "dataset_version": args.dataset_version,
                     "prompt_version": prompt_version,
+                    "query_rewriting": False,
+                    "reranker": "none",
                     "llm_provider": aggregate.model_provider,
                     "llm_model": aggregate.model_name,
                     "llm_base_url": aggregate.model_base_url,
@@ -174,6 +176,7 @@ async def main() -> None:
                 "passed_examples": aggregate.passed_examples,
                 "failed_examples": aggregate.failed_examples,
                 "pass_rate": aggregate.pass_rate,
+                "latency": aggregate.latency_ms_avg,
                 "average_quality_score": aggregate.average_quality_score,
                 "average_groundedness_score": aggregate.average_groundedness_score,
                 "latency_ms_avg": aggregate.latency_ms_avg,
@@ -187,10 +190,13 @@ async def main() -> None:
                 "responses_with_cost_estimate": aggregate.responses_with_cost_estimate,
             }
             if aggregate.average_context_relevance is not None:
+                metrics["faithfulness"] = aggregate.average_faithfulness or 0.0
+                metrics["answer_relevance"] = aggregate.average_answer_relevance or 0.0
                 metrics["average_context_relevance"] = aggregate.average_context_relevance
                 metrics["average_faithfulness"] = aggregate.average_faithfulness or 0.0
                 metrics["average_answer_relevance"] = aggregate.average_answer_relevance or 0.0
             if aggregate.estimated_prompt_cost_usd is not None:
+                metrics["cost"] = aggregate.estimated_total_cost_usd or 0.0
                 metrics["estimated_prompt_cost_usd"] = aggregate.estimated_prompt_cost_usd
                 metrics["estimated_completion_cost_usd"] = (
                     aggregate.estimated_completion_cost_usd or 0.0

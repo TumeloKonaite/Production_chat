@@ -131,6 +131,16 @@ async def main() -> None:
             "embedding_provider": settings.embedding_provider,
             "embedding_model": settings.knowledge_embedding_model,
             "embedding_dimension": settings.embedding_dimension,
+            "chunk_size": settings.knowledge_chunk_size,
+            "chunk_overlap": settings.knowledge_chunk_overlap,
+            "query_rewriting": False,
+            "reranker": settings.reranker_type if settings.enable_reranking else "none",
+            "reranker_enabled": settings.enable_reranking,
+            "reranker_model": settings.reranker_model if settings.enable_reranking else None,
+            "reranker_initial_top_k": (
+                settings.reranker_initial_top_k if settings.enable_reranking else None
+            ),
+            "reranker_final_top_k": top_k,
             "collection_name": settings.knowledge_collection_name,
         }
 
@@ -172,6 +182,7 @@ async def main() -> None:
                         "run_name": args.run_name,
                         "dataset_name": args.dataset.name,
                         "dataset_path": str(args.dataset),
+                        "llm_model": args.model,
                         "model_config_id": args.model,
                         "model_name": summary.model_name,
                         "judge_model_config_id": args.judge_model,
@@ -180,18 +191,40 @@ async def main() -> None:
                         "retrieval_config": retrieval_config,
                         "temperature": args.temperature,
                         "top_k": top_k,
+                        "query_rewriting": False,
                         "retriever_type": settings.retriever_type,
+                        "reranker": settings.reranker_type if settings.enable_reranking else "none",
+                        "chunk_size": settings.knowledge_chunk_size,
+                        "chunk_overlap": settings.knowledge_chunk_overlap,
                         "min_similarity": settings.retrieval_min_similarity,
                         "embedding_provider": settings.embedding_provider,
                         "embedding_model": settings.knowledge_embedding_model,
                         "embedding_dimension": settings.embedding_dimension,
                         "knowledge_collection_name": settings.knowledge_collection_name,
+                        "reranker_enabled": settings.enable_reranking,
+                        "reranker_type": settings.reranker_type if settings.enable_reranking else "none",
+                        "reranker_model": settings.reranker_model if settings.enable_reranking else None,
+                        "reranker_initial_top_k": (
+                            settings.reranker_initial_top_k if settings.enable_reranking else None
+                        ),
+                        "reranker_final_top_k": top_k,
                         "persisted_to_db": not args.no_db,
                     }
                 )
                 tracker.log_metrics(
                     {
                         "total_questions": summary.total_questions,
+                        "precision_at_k": summary.avg_precision_at_k,
+                        "recall_at_k": summary.avg_recall_at_k,
+                        "mrr": summary.avg_mrr,
+                        "faithfulness": summary.avg_faithfulness,
+                        "answer_relevance": summary.avg_answer_relevance,
+                        "latency": summary.latency_ms_avg,
+                        "cost": (
+                            summary.estimated_total_cost_usd
+                            if summary.estimated_total_cost_usd is not None
+                            else 0.0
+                        ),
                         "avg_precision_at_k": summary.avg_precision_at_k,
                         "avg_recall_at_k": summary.avg_recall_at_k,
                         "avg_mrr": summary.avg_mrr,
@@ -199,6 +232,20 @@ async def main() -> None:
                         "avg_context_relevance": summary.avg_context_relevance,
                         "avg_faithfulness": summary.avg_faithfulness,
                         "avg_answer_relevance": summary.avg_answer_relevance,
+                        "latency_ms_avg": summary.latency_ms_avg,
+                        "latency_ms_p50": summary.latency_ms_p50,
+                        "latency_ms_p95": summary.latency_ms_p95,
+                        "estimated_total_cost_usd": (
+                            summary.estimated_total_cost_usd
+                            if summary.estimated_total_cost_usd is not None
+                            else 0.0
+                        ),
+                        "average_cost_per_question_usd": (
+                            summary.average_cost_per_question_usd
+                            if summary.average_cost_per_question_usd is not None
+                            else 0.0
+                        ),
+                        "questions_with_cost_estimate": summary.questions_with_cost_estimate,
                     }
                 )
                 tracker.log_artifact(result_path)

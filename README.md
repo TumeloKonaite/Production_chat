@@ -560,6 +560,47 @@ Authentication can be provided either with `DAGSHUB_TOKEN` in `.env` or with a p
 
 ### Running eval workflows
 
+When `ENABLE_MLFLOW_TRACKING=true`, the eval runners reuse the shared MLflow/DagsHub tracker in `app/infrastructure/tracking/` and log local artifacts plus remote run metadata through the same path.
+
+Workflows that log to MLflow/DagsHub when tracking is enabled:
+
+- `evals/run_generation_eval.py`
+- `evals/run_rag_eval.py`
+- `evals/run_retrieval_eval.py`
+- `evals/run_retrieval_sweep.py`
+- `scripts/run_chunking_experiment.py`
+- `scripts/run_embedding_experiment.py`
+
+Core tracked params are standardized where they apply:
+
+- `embedding_model`
+- `chunk_size`
+- `chunk_overlap`
+- `retriever_type`
+- `top_k`
+- `query_rewriting`
+- `reranker`
+- `llm_model`
+- `prompt_version`
+
+Core tracked metrics are standardized where they apply:
+
+- `recall_at_k`
+- `precision_at_k`
+- `mrr`
+- `faithfulness`
+- `answer_relevance`
+- `latency`
+- `cost`
+
+Local comparison workflows keep inspectable artifacts alongside MLflow:
+
+- summary CSV and JSON
+- ranked comparison markdown table
+- per-run detailed result artifacts
+
+Use local artifacts for quick inspection under `evals/results/`, and use MLflow or DagsHub to compare the same runs remotely by the standardized params and metrics above.
+
 The model comparison workflow:
 
 ```bash
@@ -618,6 +659,8 @@ python evals/run_rag_eval.py \
   --prompt-version v1_professional \
   --run-name portfolio-rag-eval
 ```
+
+This workflow logs retrieval plus generation params together, including `embedding_model`, `chunk_size`, `chunk_overlap`, `retriever_type`, `top_k`, `query_rewriting=false`, `reranker`, `llm_model`, and `prompt_version`. It also logs `recall_at_k`, `precision_at_k`, `mrr`, `faithfulness`, `answer_relevance`, `latency`, and `cost` where available.
 
 The canonical RAG benchmark contract is documented in `evals/README.md`.
 
@@ -723,7 +766,14 @@ Each sweep experiment logs as its own MLflow or DagsHub-backed MLflow run and re
 - `git_commit_sha`
 - retrieval metrics including `mrr`, `recall_at_k`, `mean_precision_at_k`, `hit_at_k`, `context_relevance`, and query counts
 
-Sweep artifacts are written under `evals/results/retrieval_sweeps/`. Each run gets its own artifact directory, and the sweep root also includes a manifest plus comparison JSON and CSV outputs.
+Sweep artifacts are written under `evals/results/retrieval_sweeps/`. Each run gets its own artifact directory, and the sweep root also includes:
+
+- `retrieval_sweep_summary.csv`
+- `retrieval_sweep_summary.json`
+- `retrieval_sweep_ranking.md`
+- `sweep_manifest.json`
+
+The summary artifacts are ranked by `recall_at_k`, then `mrr`, then `precision_at_k`, and the CLI prints the best configuration clearly.
 
 To compare multiple chunking strategies without editing code:
 
@@ -731,7 +781,27 @@ To compare multiple chunking strategies without editing code:
 python scripts/run_chunking_experiment.py --configs "300:50,500:100,800:150,1000:200"
 ```
 
-This re-ingests the knowledge base for each chunk config, runs retrieval eval, writes per-run artifacts, and saves comparison outputs under `evals/results/chunking_experiments/`.
+This re-ingests the knowledge base for each chunk config, runs retrieval eval, logs one MLflow run per chunk setup, and writes local artifacts under `evals/results/chunking_experiments/`, including:
+
+- `chunking_experiment_summary.csv`
+- `chunking_experiment_summary.json`
+- `chunking_experiment_ranking.md`
+- per-config `results.json`, `results.csv`, and `config.json`
+
+The summary output is ranked by `recall_at_k`, then `mrr`, then `precision_at_k`.
+
+To compare multiple embedding setups against the same retrieval dataset:
+
+```bash
+python scripts/run_embedding_experiment.py --config evals/configs/retrieval_embedding_matrix.example.json
+```
+
+This workflow logs one MLflow run per embedding setup and writes local artifacts under `evals/results/embedding_experiments/`, including:
+
+- `embedding_experiment_summary.csv`
+- `embedding_experiment_summary.json`
+- `embedding_experiment_ranking.md`
+- per-model `results.json`, `results.csv`, and `config.json`
 
 The prompt comparison workflow:
 
@@ -743,7 +813,7 @@ python scripts/compare_prompts.py \
 ```
 
 Artifacts are written under `evals/results/` and `evals/prompt_eval_results/`.
-When `ENABLE_MLFLOW_TRACKING=true`, the runners log one MLflow run per evaluated unit plus the generated JSON and summary artifacts.
+When `ENABLE_MLFLOW_TRACKING=true`, the runners log one MLflow run per evaluated unit, plus workflow-level summary artifacts for the comparison-style retrieval, chunking, and embedding workflows.
 
 ## Tests
 

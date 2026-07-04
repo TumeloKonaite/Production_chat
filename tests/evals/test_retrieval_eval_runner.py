@@ -195,6 +195,7 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
         "k": 5,
         "hit_at_k": 1.0,
         "recall_at_k": 1.0,
+        "precision_at_k": 0.5,
         "mean_precision_at_k": 0.5,
         "mrr": 1.0,
         "query_rewrite_total_latency_ms": 0,
@@ -362,6 +363,7 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
         "k": 5,
         "hit_at_k": 1.0,
         "recall_at_k": 1.0,
+        "precision_at_k": 1.0,
         "mean_precision_at_k": 1.0,
         "mrr": 1.0,
         "query_rewrite_total_latency_ms": 0,
@@ -459,7 +461,9 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["retriever_type"] == "vector"
     assert config["vector_store_type"] == "pgvector"
     assert config["retrieval_strategy"] == "vector"
+    assert config["query_rewriting"] is True
     assert config["query_rewriting_enabled"] is True
+    assert config["reranker"] == "none"
     assert config["query_rewrite_model"] == "openai:gpt-4.1-mini"
     assert config["chunk_size"] == 500
     assert config["chunk_overlap"] == 100
@@ -511,12 +515,14 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "chunk_size": 500,
             "chunk_overlap": 100,
             "git_commit_sha": "abc123",
+            "query_rewriting": True,
             "query_rewriting_enabled": True,
             "query_rewrite_model": "openai:gpt-4.1-mini",
             "query_rewrite_temperature": 0.0,
             "query_rewrite_prompt_version": "v1",
             "query_rewrite_timeout_seconds": 10,
             "query_rewrite_max_tokens": 128,
+            "reranker": "none",
             "reranker_enabled": False,
             "reranker_type": "none",
             "reranker_model": None,
@@ -550,12 +556,14 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "chunk_overlap": 100,
             "retrieval_min_similarity": 0.55,
             "git_commit_sha": "abc123",
+            "query_rewriting": True,
             "query_rewriting_enabled": True,
             "query_rewrite_model": "openai:gpt-4.1-mini",
             "query_rewrite_temperature": 0.0,
             "query_rewrite_prompt_version": "v1",
             "query_rewrite_timeout_seconds": 10,
             "query_rewrite_max_tokens": 128,
+            "reranker": "none",
             "reranker_enabled": False,
             "reranker_type": "none",
             "reranker_model": None,
@@ -571,6 +579,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "num_queries_without_expected_sources": 1,
             "hit_at_k": 1.0,
             "recall_at_k": 1.0,
+            "precision_at_k": 0.5,
             "mean_precision_at_k": 0.5,
             "mrr": 1.0,
             "query_rewrite_total_latency_ms": 0,

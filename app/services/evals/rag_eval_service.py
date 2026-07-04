@@ -105,6 +105,9 @@ class RagEvalService:
                 answer = build_direct_fallback_text(example.question)
                 answer_latency_ms = 0
                 answer_token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                answer_estimated_prompt_cost_usd = 0.0
+                answer_estimated_completion_cost_usd = 0.0
+                answer_estimated_cost_usd = 0.0
             else:
                 response = await self._llm_service.generate_response(
                     [LLMChatMessage(role="user", content=example.question)],
@@ -125,6 +128,9 @@ class RagEvalService:
                     "output_tokens": response.token_usage.output_tokens,
                     "total_tokens": response.token_usage.total_tokens,
                 }
+                answer_estimated_prompt_cost_usd = response.estimated_prompt_cost_usd
+                answer_estimated_completion_cost_usd = response.estimated_completion_cost_usd
+                answer_estimated_cost_usd = response.estimated_cost_usd
 
             retrieval_metrics = RagEvalRetrievalMetrics(
                 precision_at_k=precision_at_k(
@@ -182,9 +188,18 @@ class RagEvalService:
                         "judge_output_tokens": judge_usage.output_tokens,
                         "judge_total_tokens": judge_usage.total_tokens,
                     },
+                    answer_estimated_prompt_cost_usd=answer_estimated_prompt_cost_usd,
+                    answer_estimated_completion_cost_usd=answer_estimated_completion_cost_usd,
+                    answer_estimated_cost_usd=answer_estimated_cost_usd,
                 )
             )
 
+        latencies = sorted(float(result.latency_ms) for result in results)
+        answer_costs = [
+            result.answer_estimated_cost_usd
+            for result in results
+            if result.answer_estimated_cost_usd is not None
+        ]
         summary = RagEvalRunSummary(
             run_name=run_name,
             dataset_name=dataset_name,
@@ -205,6 +220,14 @@ class RagEvalService:
             avg_answer_relevance=mean(
                 result.judge_evaluation.answer_relevance.score for result in results
             ),
+            latency_ms_avg=mean(latencies) if latencies else 0.0,
+            latency_ms_p50=_percentile(latencies, percentile=0.50),
+            latency_ms_p95=_percentile(latencies, percentile=0.95),
+            estimated_total_cost_usd=round(sum(answer_costs), 6) if answer_costs else None,
+            average_cost_per_question_usd=(
+                round(sum(answer_costs) / len(results), 6) if answer_costs and results else None
+            ),
+            questions_with_cost_estimate=len(answer_costs),
         )
 
         if persist_results and self._eval_repository is not None:
@@ -215,9 +238,9 @@ class RagEvalService:
     def render_summary_table(self, summaries: list[RagEvalRunSummary]) -> str:
         header = (
             "Run | Model | Prompt | Top K | Recall@K | Precision@K | MRR | NDCG@K | "
-            "Context Relevance | Faithfulness | Answer Relevance"
+            "Context Relevance | Faithfulness | Answer Relevance | Latency | Cost"
         )
-        separator = "-- | -- | -- | -- | -- | -- | -- | -- | -- | -- | --"
+        separator = "-- | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- | --"
         rows = [
             " | ".join(
                 [
@@ -232,6 +255,12 @@ class RagEvalService:
                     f"{summary.avg_context_relevance:.2f}",
                     f"{summary.avg_faithfulness:.2f}",
                     f"{summary.avg_answer_relevance:.2f}",
+                    f"{summary.latency_ms_avg:.0f}ms",
+                    (
+                        f"${summary.estimated_total_cost_usd:.6f}"
+                        if summary.estimated_total_cost_usd is not None
+                        else "n/a"
+                    ),
                 ]
             )
             for summary in summaries
@@ -278,3 +307,10 @@ class RagEvalService:
             ]
         )
         return "\n\n".join([judge_prompt_template.strip(), evaluation_payload]).strip()
+
+
+def _percentile(values: list[float], *, percentile: float) -> float:
+    if not values:
+        return 0.0
+    index = max(0, min(len(values) - 1, int(round((len(values) - 1) * percentile))))
+    return values[index]

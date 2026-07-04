@@ -90,6 +90,9 @@ class RetrievalService:
             )
         return self._vectorstore
 
+    def get_vector_store_dimension(self) -> int | None:
+        return self._get_vector_column_dimension()
+
     def replace_all_chunks(self, chunks: list[KnowledgeChunk]) -> None:
         self._ensure_vector_dimension_is_supported()
         self.vectorstore.delete_collection()

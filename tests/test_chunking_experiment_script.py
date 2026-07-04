@@ -60,9 +60,10 @@ def test_write_comparison_artifacts_marks_best_run(tmp_path) -> None:
 
     artifact_paths = write_comparison_artifacts(tmp_path, rows=rows)
 
-    payload = json.loads(artifact_paths["comparison_json"].read_text(encoding="utf-8"))
-    assert payload["best_config"]["chunk_size"] == 500
+    payload = json.loads(artifact_paths["summary_json"].read_text(encoding="utf-8"))
+    assert payload["best_configuration"]["chunk_size"] == 500
     assert payload["runs"][0]["is_best"] is True
-    csv_text = artifact_paths["comparison_csv"].read_text(encoding="utf-8")
+    csv_text = artifact_paths["summary_csv"].read_text(encoding="utf-8")
     assert "is_best" in csv_text
     assert "500" in csv_text
+    assert artifact_paths["ranking_md"].exists()
