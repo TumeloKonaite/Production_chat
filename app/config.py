@@ -29,6 +29,7 @@ class Settings:
     public_backend_url: str | None
     tavus_tool_secret: str | None
     ingestion_api_secret: str | None
+    eval_admin_token: str | None
     default_model_config_id: str
     model_configs_json: str | None
     embedding_provider: str
@@ -141,6 +142,7 @@ def get_settings() -> Settings:
         public_backend_url=os.getenv("PUBLIC_BACKEND_URL"),
         tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
+        eval_admin_token=_get_non_empty_env("EVAL_ADMIN_TOKEN"),
         default_model_config_id=configured_model or "openai:gpt-4.1-mini",
         model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
         embedding_provider=(

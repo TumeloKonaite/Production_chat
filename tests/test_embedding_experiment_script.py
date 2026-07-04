@@ -272,6 +272,7 @@ def _build_settings() -> Settings:
         public_backend_url=None,
         tavus_tool_secret=None,
         ingestion_api_secret=None,
+        eval_admin_token=None,
         default_model_config_id="openai:gpt-4.1-mini",
         model_configs_json=None,
         embedding_provider="hf",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services.retrieval import RetrievedChunk
 import pytest
@@ -32,8 +33,11 @@ class FakeRetrievalService:
 
 
 class FakeTrackerRun:
-    def __enter__(self) -> None:
-        return None
+    def __init__(self, run_id: str = "mlflow-run-123") -> None:
+        self.info = SimpleNamespace(run_id=run_id)
+
+    def __enter__(self) -> FakeTrackerRun:
+        return self
 
     def __exit__(self, *_: object) -> None:
         return None
@@ -291,8 +295,12 @@ def test_build_run_config_captures_retrieval_settings() -> None:
         top_k=5,
         timestamp="2026-07-02T20:30:00+02:00",
         argv=["evals/run_retrieval_eval.py", "--k", "5"],
+        run_name="retrieval-vector-k5-2026-07-02_203000",
+        notes="Triggered from API",
     )
 
+    assert config["run_name"] == "retrieval-vector-k5-2026-07-02_203000"
+    assert config["notes"] == "Triggered from API"
     assert config["embedding_provider"] == "hf"
     assert config["embedding_model"] == "all-MiniLM-L6-v2"
     assert config["embedding_dimension"] == 384
@@ -329,7 +337,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
     for path in artifact_paths.values():
         path.write_text("{}", encoding="utf-8")
 
-    log_run_to_tracker(
+    run_id = log_run_to_tracker(
         tracker=tracker,
         settings=settings,
         dataset_path=Path("evals/datasets/portfolio_eval_dataset.jsonl"),
@@ -345,6 +353,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "mrr": 1.0,
         },
         config={
+            "notes": "Triggered from API",
             "chunk_size": 500,
             "chunk_overlap": 100,
             "git_commit_sha": "abc123",
@@ -357,9 +366,12 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
         ),
     )
 
+    assert run_id == "mlflow-run-123"
     assert tracker.run_names == ["retrieval-hybrid-k5-2026-07-03_145252"]
     assert tracker.params == [
         {
+            "run_name": "retrieval-hybrid-k5-2026-07-03_145252",
+            "notes": "Triggered from API",
             "dataset_name": "portfolio_eval_dataset.jsonl",
             "dataset_path": "evals\\datasets\\portfolio_eval_dataset.jsonl",
             "retriever_type": "hybrid",
