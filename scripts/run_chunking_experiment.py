@@ -231,6 +231,7 @@ def main() -> None:
             top_k=args.k,
             timestamp=timestamp,
             argv=sys.argv,
+            run_name=timestamp_label,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )

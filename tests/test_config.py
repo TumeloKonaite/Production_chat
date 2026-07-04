@@ -47,6 +47,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("CHUNK_OVERLAP", raising=False)
     monkeypatch.delenv("RETRIEVER_TYPE", raising=False)
     monkeypatch.delenv("RETRIEVAL_TOP_K", raising=False)
+    monkeypatch.delenv("EVAL_ADMIN_TOKEN", raising=False)
 
     settings = get_settings()
 
@@ -54,16 +55,19 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.knowledge_chunk_overlap == DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     assert settings.retriever_type == "vector"
     assert settings.retrieval_top_k == 5
+    assert settings.eval_admin_token is None
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHUNK_SIZE", "500")
     monkeypatch.setenv("CHUNK_OVERLAP", "100")
+    monkeypatch.setenv("EVAL_ADMIN_TOKEN", "eval-secret")
 
     settings = get_settings()
 
     assert settings.knowledge_chunk_size == 500
     assert settings.knowledge_chunk_overlap == 100
+    assert settings.eval_admin_token == "eval-secret"
 
 
 @pytest.mark.parametrize(

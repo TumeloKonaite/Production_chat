@@ -157,6 +157,7 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
         }
         return RetrievalEvalRunResult(
             run_name=str(kwargs["run_name"]),
+            mlflow_run_id=None,
             output_dir=run_output_dir,
             summary=summary,
             results=[],
@@ -264,6 +265,7 @@ def _build_settings() -> Settings:
         public_backend_url=None,
         tavus_tool_secret=None,
         ingestion_api_secret=None,
+        eval_admin_token=None,
         default_model_config_id="openai:gpt-4.1-mini",
         model_configs_json=None,
         embedding_provider="hf",

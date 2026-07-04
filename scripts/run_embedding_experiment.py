@@ -178,6 +178,7 @@ def run_embedding_experiment_matrix(
             top_k=max(experiment_config.k_values),
             timestamp=timestamp,
             argv=argv,
+            run_name=timestamp_label,
             chunk_size=run_settings.knowledge_chunk_size,
             chunk_overlap=run_settings.knowledge_chunk_overlap,
         )

@@ -55,6 +55,7 @@ class RetrievalDatasetValidationSummary:
 @dataclass(frozen=True, slots=True)
 class RetrievalEvalRunResult:
     run_name: str
+    mlflow_run_id: str | None
     output_dir: Path
     summary: dict[str, Any]
     results: list[dict[str, Any]]
@@ -278,6 +279,8 @@ def build_run_config(
     top_k: int,
     timestamp: str,
     argv: list[str],
+    run_name: str,
+    notes: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
 ) -> dict[str, Any]:
@@ -291,6 +294,8 @@ def build_run_config(
 
     return {
         "timestamp": timestamp,
+        "run_name": run_name,
+        "notes": notes,
         "dataset_path": str(dataset_path),
         "retriever_type": settings.retriever_type,
         "top_k": top_k,
@@ -394,13 +399,15 @@ def log_run_to_tracker(
     config: dict[str, Any],
     artifact_paths: dict[str, Path],
     run_name: str,
-) -> None:
+) -> str | None:
     if not tracker.enabled:
-        return
+        return None
 
-    with tracker.run(run_name):
+    with tracker.run(run_name) as run:
         tracker.log_params(
             {
+                "run_name": run_name,
+                "notes": config.get("notes"),
                 "dataset_name": dataset_path.name,
                 "dataset_path": str(dataset_path),
                 "retriever_type": settings.retriever_type,
@@ -434,6 +441,7 @@ def log_run_to_tracker(
         )
         for artifact_path in artifact_paths.values():
             tracker.log_artifact(artifact_path)
+    return _extract_mlflow_run_id(run)
 
 
 def run_retrieval_eval(
@@ -446,6 +454,7 @@ def run_retrieval_eval(
     argv: list[str],
     min_expected_source_coverage: float = DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
     run_name: str | None = None,
+    notes: str | None = None,
     output_label: str | None = None,
     timestamp: str | None = None,
     timestamp_label: str | None = None,
@@ -490,6 +499,8 @@ def run_retrieval_eval(
         top_k=top_k,
         timestamp=resolved_timestamp,
         argv=argv,
+        run_name=resolved_run_name,
+        notes=notes,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
@@ -505,7 +516,7 @@ def run_retrieval_eval(
         results=results,
         config=config,
     )
-    log_run_to_tracker(
+    mlflow_run_id = log_run_to_tracker(
         tracker=tracker,
         settings=settings,
         dataset_path=resolved_dataset_path,
@@ -518,6 +529,7 @@ def run_retrieval_eval(
 
     return RetrievalEvalRunResult(
         run_name=resolved_run_name,
+        mlflow_run_id=mlflow_run_id,
         output_dir=run_output_dir,
         summary=summary,
         results=results,
@@ -576,6 +588,15 @@ def _mean_or_none(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _extract_mlflow_run_id(run: object | None) -> str | None:
+    if run is None:
+        return None
+
+    info = getattr(run, "info", None)
+    run_id = getattr(info, "run_id", None)
+    return run_id if isinstance(run_id, str) and run_id else None
 
 
 def _normalize_k_values(k_values: list[int]) -> list[int]:

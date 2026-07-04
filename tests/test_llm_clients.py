@@ -32,6 +32,7 @@ def build_test_settings(
         public_backend_url="https://backend.example",
         tavus_tool_secret="tool-secret",
         ingestion_api_secret="ingestion-secret",
+        eval_admin_token="eval-secret",
         default_model_config_id=default_model_config_id,
         model_configs_json=model_configs_json,
         embedding_provider="hf",

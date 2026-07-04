@@ -573,6 +573,20 @@ To compare multiple retrieval configurations in one command, use the sweep runne
 python evals/run_retrieval_sweep.py --config evals/configs/retrieval_sweep.yaml
 ```
 
+The protected backend exposes the same batch pattern over HTTP:
+
+```bash
+curl -X POST http://localhost:8000/api/evals/retrieval-sweeps \
+  -H "Content-Type: application/json" \
+  -H "x-eval-admin-token: <EVAL_ADMIN_TOKEN>" \
+  -d '{
+    "experiments": [
+      {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
+      {"name": "retrieval-keyword-k5", "retriever_type": "keyword", "top_k": 5}
+    ]
+  }'
+```
+
 The sample sweep config defines one run per experiment:
 
 ```yaml
