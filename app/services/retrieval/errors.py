@@ -8,3 +8,11 @@ class VectorIndexConfigurationError(Exception):
 
 class UnsupportedRetrieverError(Exception):
     """Raised when the requested retriever type cannot be constructed."""
+
+
+class UnsupportedRerankerError(Exception):
+    """Raised when the requested reranker type cannot be constructed."""
+
+
+class InvalidRerankerResultError(Exception):
+    """Raised when a reranker returns an invalid chunk ordering."""

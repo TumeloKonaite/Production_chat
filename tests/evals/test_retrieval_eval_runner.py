@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.domain.evals import JudgeEvaluation, JudgeMetricScore
+from app.infrastructure.llm.base import TokenUsage
 from app.services.retrieval import RetrievedChunk
 import pytest
 from evals.query_rewriter import (
@@ -22,6 +24,7 @@ from evals.run_retrieval_eval import (
     evaluate_examples_for_k_values,
     format_dataset_validation_summary,
     load_and_validate_dataset,
+    load_eval_config,
     log_run_to_tracker,
     parse_args,
     run_retrieval_eval,
@@ -86,6 +89,31 @@ class FakeQueryRewriter:
     ) -> QueryRewriteResult:
         self.calls.append((original_query, context))
         return self._results[original_query]
+
+
+class FakeJudge:
+    def __init__(self, score: int = 2) -> None:
+        self.score = score
+        self.prompts: list[str] = []
+
+    async def evaluate(
+        self,
+        *,
+        prompt: str,
+        model_config_id: str | None = None,
+    ):
+        del model_config_id
+        self.prompts.append(prompt)
+        return (
+            JudgeEvaluation(
+                context_relevance=JudgeMetricScore(score=self.score, reason="Useful."),
+                faithfulness=JudgeMetricScore(score=2, reason="Ignored."),
+                answer_relevance=JudgeMetricScore(score=0, reason="Ignored."),
+            ),
+            TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            50,
+            "gpt-4.1-mini",
+        )
 
 
 def build_chunk(*, chunk_id: str, source: str, similarity: float = 0.9) -> RetrievedChunk:
@@ -178,13 +206,20 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
         "query_rewrite_total_completion_tokens": 0,
         "query_rewrite_total_tokens": 0,
         "query_rewrite_estimated_total_cost": 0.0,
+        "context_relevance": None,
     }
     assert results[0]["original_query"] == "question 1"
     assert results[0]["rewritten_query"] is None
     assert results[0]["query_rewrite_status"] == "disabled"
     assert results[0]["query_used_for_retrieval"] == "question 1"
+    assert results[0]["reranker_enabled"] is False
+    assert results[0]["reranker_type"] == "none"
+    assert results[0]["retriever_top_k"] == 5
+    assert results[0]["final_top_k"] == 5
     assert results[0]["retrieved_sources"] == ["projects.md", "skills.md"]
     assert results[0]["retrieved_chunk_ids"] == ["projects.md::chunk-1", "skills.md::chunk-1"]
+    assert results[0]["before_rerank"][0]["chunk_id"] == "projects.md::chunk-1"
+    assert results[0]["after_rerank"][0]["chunk_id"] == "projects.md::chunk-1"
     assert results[0]["first_relevant_rank"] == 1
     assert results[0]["evaluation_group"] == "retrieval_evaluated"
     assert results[1]["has_expected_sources"] is False
@@ -295,6 +330,28 @@ def test_load_and_validate_dataset_reads_examples_from_jsonl(tmp_path: Path) -> 
     assert validation_summary.queries_without_expected_sources == 0
 
 
+def test_load_eval_config_reads_json_object(tmp_path: Path) -> None:
+    config_path = tmp_path / "retrieval_eval.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "dataset": "dataset.jsonl",
+                "retriever_top_k": 20,
+                "final_top_k": 5,
+                "reranker_enabled": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_eval_config(config_path)
+
+    assert config["dataset"] == "dataset.jsonl"
+    assert config["retriever_top_k"] == 20
+    assert config["final_top_k"] == 5
+    assert config["reranker_enabled"] is True
+
+
 def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) -> None:
     output_dir = create_output_directory(tmp_path, timestamp_label="2026-07-02_203000")
     summary = {
@@ -316,6 +373,7 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
         "query_rewrite_total_completion_tokens": 0,
         "query_rewrite_total_tokens": 0,
         "query_rewrite_estimated_total_cost": 0.0,
+        "context_relevance": None,
     }
     results = [
         {
@@ -375,6 +433,11 @@ def test_build_run_config_captures_retrieval_settings() -> None:
             "query_rewrite_prompt_version": "v1",
             "query_rewrite_timeout_seconds": 10,
             "query_rewrite_max_tokens": 128,
+            "reranker_enabled": False,
+            "reranker_type": "none",
+            "reranker_model": None,
+            "reranker_initial_top_k": 5,
+            "reranker_final_top_k": 5,
         },
     )()
 
@@ -454,6 +517,11 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "query_rewrite_prompt_version": "v1",
             "query_rewrite_timeout_seconds": 10,
             "query_rewrite_max_tokens": 128,
+            "reranker_enabled": False,
+            "reranker_type": "none",
+            "reranker_model": None,
+            "reranker_initial_top_k": 5,
+            "reranker_final_top_k": 5,
         },
         artifact_paths=artifact_paths,
         run_name=build_tracking_run_name(
@@ -488,6 +556,11 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "query_rewrite_prompt_version": "v1",
             "query_rewrite_timeout_seconds": 10,
             "query_rewrite_max_tokens": 128,
+            "reranker_enabled": False,
+            "reranker_type": "none",
+            "reranker_model": None,
+            "reranker_initial_top_k": 5,
+            "reranker_final_top_k": 5,
         }
     ]
     assert tracker.metrics == [
@@ -509,6 +582,7 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "query_rewrite_total_completion_tokens": 0,
             "query_rewrite_total_tokens": 0,
             "query_rewrite_estimated_total_cost": 0.0,
+            "context_relevance": 0.0,
         }
     ]
     assert tracker.artifacts == list(artifact_paths.values())
@@ -558,6 +632,35 @@ def test_evaluate_examples_for_k_values_reports_multi_k_summary() -> None:
     assert results[0]["metrics_by_k"]["1"]["hit_at_k"] == 1.0
     assert results[1]["metrics_by_k"]["1"]["hit_at_k"] == 0.0
     assert results[1]["metrics_by_k"]["3"]["recall_at_k"] == 1.0
+
+
+def test_evaluate_examples_records_context_relevance_when_judge_succeeds() -> None:
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="question 1",
+            expected_source_documents=["projects.md"],
+        )
+    ]
+    retrieval_service = FakeRetrievalService(
+        {
+            "question 1": [
+                build_chunk(chunk_id="projects.md::chunk-1", source="projects.md"),
+            ],
+        }
+    )
+    judge = FakeJudge(score=2)
+
+    summary, results = evaluate_examples(
+        examples,
+        retrieval_service,
+        k=5,
+        context_relevance_judge=judge,
+    )
+
+    assert summary["context_relevance"] == 2.0
+    assert results[0]["context_relevance"] == 2.0
+    assert "Return exactly one JSON object" in judge.prompts[0]
 
 
 def test_evaluate_examples_uses_rewritten_query_when_query_rewriting_succeeds() -> None:
@@ -772,3 +875,38 @@ def test_parse_args_accepts_query_rewriting_flags(monkeypatch: pytest.MonkeyPatc
 
     assert args.enable_query_rewriting is True
     assert args.disable_query_rewriting is False
+
+
+def test_parse_args_accepts_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["evals/run_retrieval_eval.py", "--config", "configs/evals/retrieval_baseline.json"],
+    )
+
+    args = parse_args()
+
+    assert args.config == Path("configs/evals/retrieval_baseline.json")
+
+
+def test_parse_args_accepts_reranker_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evals/run_retrieval_eval.py",
+            "--enable-reranker",
+            "--reranker-type",
+            "llm",
+            "--reranker-model",
+            "openai:gpt-4.1-mini",
+            "--reranker-initial-top-k",
+            "20",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.enable_reranker is True
+    assert args.disable_reranker is False
+    assert args.reranker_type == "llm"
+    assert args.reranker_model == "openai:gpt-4.1-mini"
+    assert args.reranker_initial_top_k == 20

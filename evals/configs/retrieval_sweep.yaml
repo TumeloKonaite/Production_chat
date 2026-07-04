@@ -1,15 +1,21 @@
 experiments:
-  - name: retrieval-vector-k3
-    retriever_type: vector
-    top_k: 3
-
-  - name: retrieval-vector-k5
+  - name: retrieval-baseline-k5
     retriever_type: vector
     top_k: 5
 
-  - name: retrieval-vector-k10
+  - name: retrieval-reranked-k5-from10
     retriever_type: vector
-    top_k: 10
+    top_k: 5
+    reranker_enabled: true
+    reranker_type: llm
+    reranker_initial_top_k: 10
+
+  - name: retrieval-reranked-k5-from20
+    retriever_type: vector
+    top_k: 5
+    reranker_enabled: true
+    reranker_type: llm
+    reranker_initial_top_k: 20
 
   - name: retrieval-keyword-k5
     retriever_type: keyword

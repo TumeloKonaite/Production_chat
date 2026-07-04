@@ -124,6 +124,11 @@ CONVERSATION_HISTORY_LIMIT=10
 RETRIEVAL_TOP_K=5
 RETRIEVAL_MIN_SIMILARITY=0.55
 DEFAULT_RETRIEVAL_CONFIG=default
+ENABLE_RERANKING=false
+RERANKER_TYPE=none
+RERANKER_MODEL=openai:gpt-4.1-mini
+RERANKER_INITIAL_TOP_K=20
+RERANKER_FINAL_TOP_K=5
 ENABLE_MLFLOW_TRACKING=false
 MLFLOW_TRACKING_URI=
 MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
@@ -562,10 +567,22 @@ The canonical RAG benchmark contract is documented in `evals/README.md`.
 The retrieval-only baseline workflow:
 
 ```bash
-python evals/run_retrieval_eval.py --k 5
+uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_baseline.json
 ```
 
-The retrieval artifact payload includes the embedding provider, embedding model, embedding dimension, and chunking config used for that run.
+The reranked retrieval workflow:
+
+```bash
+uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_reranked_llm.json
+```
+
+The same runner still supports direct flag overrides when needed:
+
+```bash
+python evals/run_retrieval_eval.py --k 5 --enable-reranker --reranker-type llm --reranker-initial-top-k 20
+```
+
+The retrieval artifact payload includes reranker config, before/after chunk order, context relevance, embedding config, and chunking config used for that run.
 
 To compare multiple retrieval configurations in one command, use the sweep runner with a YAML config:
 
@@ -581,7 +598,15 @@ curl -X POST http://localhost:8000/api/evals/retrieval-sweeps \
   -H "x-eval-admin-token: <EVAL_ADMIN_TOKEN>" \
   -d '{
     "experiments": [
-      {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
+      {"name": "retrieval-baseline-k5", "retriever_type": "vector", "top_k": 5},
+      {
+        "name": "retrieval-reranked-k5-from20",
+        "retriever_type": "vector",
+        "top_k": 5,
+        "reranker_enabled": true,
+        "reranker_type": "llm",
+        "reranker_initial_top_k": 20
+      },
       {"name": "retrieval-keyword-k5", "retriever_type": "keyword", "top_k": 5}
     ]
   }'
@@ -591,17 +616,23 @@ The sample sweep config defines one run per experiment:
 
 ```yaml
 experiments:
-  - name: retrieval-vector-k3
-    retriever_type: vector
-    top_k: 3
-
-  - name: retrieval-vector-k5
+  - name: retrieval-baseline-k5
     retriever_type: vector
     top_k: 5
 
-  - name: retrieval-vector-k10
+  - name: retrieval-reranked-k5-from10
     retriever_type: vector
-    top_k: 10
+    top_k: 5
+    reranker_enabled: true
+    reranker_type: llm
+    reranker_initial_top_k: 10
+
+  - name: retrieval-reranked-k5-from20
+    retriever_type: vector
+    top_k: 5
+    reranker_enabled: true
+    reranker_type: llm
+    reranker_initial_top_k: 20
 
   - name: retrieval-keyword-k5
     retriever_type: keyword
@@ -615,17 +646,25 @@ Optional per-experiment overrides:
 - `embedding_dimension`
 - `chunk_size`
 - `chunk_overlap`
+- `reranker_enabled`
+- `reranker_type`
+- `reranker_model`
+- `reranker_initial_top_k`
 
 Each sweep experiment logs as its own MLflow or DagsHub-backed MLflow run and records:
 
 - `retriever_type`
 - `top_k`
+- `reranker_enabled`
+- `reranker_type`
+- `reranker_initial_top_k`
+- `reranker_final_top_k`
 - `embedding_provider`
 - `embedding_model`
 - `embedding_dimension`
 - `dataset_path`
 - `git_commit_sha`
-- retrieval metrics including `mrr`, `recall_at_k`, `mean_precision_at_k`, `hit_at_k`, and query counts
+- retrieval metrics including `mrr`, `recall_at_k`, `mean_precision_at_k`, `hit_at_k`, `context_relevance`, and query counts
 
 Sweep artifacts are written under `evals/results/retrieval_sweeps/`. Each run gets its own artifact directory, and the sweep root also includes a manifest plus comparison JSON and CSV outputs.
 

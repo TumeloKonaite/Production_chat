@@ -1,0 +1,10 @@
+{
+  "run_name": "retrieval-vector-baseline-k5",
+  "dataset": "../../evals/datasets/portfolio_eval_dataset.jsonl",
+  "output_dir": "../../evals/results/retrieval",
+  "retriever_type": "vector",
+  "retriever_top_k": 5,
+  "final_top_k": 5,
+  "query_rewriting_enabled": false,
+  "reranker_enabled": false
+}

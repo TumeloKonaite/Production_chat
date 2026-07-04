@@ -9,6 +9,7 @@ from app.config import (
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
+    SUPPORTED_RERANKER_TYPES,
     SUPPORTED_RETRIEVER_TYPES,
     get_settings,
 )
@@ -62,6 +63,11 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.query_rewrite_prompt_version == "v1"
     assert settings.query_rewrite_timeout_seconds == 10
     assert settings.query_rewrite_max_tokens == 128
+    assert settings.enable_reranking is False
+    assert settings.reranker_type == "none"
+    assert settings.reranker_model == "openai:gpt-4.1-mini"
+    assert settings.reranker_initial_top_k == 20
+    assert settings.reranker_final_top_k == 5
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,6 +102,24 @@ def test_get_settings_uses_configured_query_rewrite_values(
     assert settings.query_rewrite_max_tokens == 64
 
 
+def test_get_settings_uses_configured_reranker_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_RERANKING", "true")
+    monkeypatch.setenv("RERANKER_TYPE", "llm")
+    monkeypatch.setenv("RERANKER_MODEL", "openai:gpt-4.1")
+    monkeypatch.setenv("RERANKER_INITIAL_TOP_K", "25")
+    monkeypatch.setenv("RERANKER_FINAL_TOP_K", "7")
+
+    settings = get_settings()
+
+    assert settings.enable_reranking is True
+    assert settings.reranker_type == "llm"
+    assert settings.reranker_model == "openai:gpt-4.1"
+    assert settings.reranker_initial_top_k == 25
+    assert settings.reranker_final_top_k == 7
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value", "expected_message"),
     [
@@ -106,6 +130,8 @@ def test_get_settings_uses_configured_query_rewrite_values(
         ("RETRIEVAL_TOP_K", "abc", "RETRIEVAL_TOP_K must be an integer."),
         ("QUERY_REWRITE_TEMPERATURE", "-0.1", "QUERY_REWRITE_TEMPERATURE must be greater than or equal to 0."),
         ("QUERY_REWRITE_MAX_TOKENS", "0", "QUERY_REWRITE_MAX_TOKENS must be greater than 0."),
+        ("RERANKER_INITIAL_TOP_K", "0", "RERANKER_INITIAL_TOP_K must be greater than 0."),
+        ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(
@@ -129,6 +155,16 @@ def test_get_settings_rejects_invalid_retriever_type(
 
     supported_values = ", ".join(sorted(SUPPORTED_RETRIEVER_TYPES))
     with pytest.raises(ValueError, match=f"RETRIEVER_TYPE must be one of: {supported_values}."):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_reranker_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RERANKER_TYPE", "cross_encoder")
+
+    supported_values = ", ".join(sorted(SUPPORTED_RERANKER_TYPES))
+    with pytest.raises(ValueError, match=f"RERANKER_TYPE must be one of: {supported_values}."):
         get_settings()
 
 

@@ -147,6 +147,59 @@ def test_judge_client_uses_configured_base_url() -> None:
     assert model == "anthropic/claude-3.5-sonnet"
 
 
+def test_judge_client_accepts_fenced_json_and_string_scores() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "```json\n"
+                                + json.dumps(
+                                    {
+                                        "context_relevance": {
+                                            "score": "2",
+                                            "reason": "Grounded.",
+                                        },
+                                        "faithfulness": {
+                                            "score": "2",
+                                            "reason": "Supported.",
+                                        },
+                                        "answer_relevance": {
+                                            "score": "0",
+                                            "reason": "Ignored.",
+                                        },
+                                    }
+                                )
+                                + "\n```"
+                            )
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 10,
+                    "total_tokens": 30,
+                },
+            },
+        )
+
+    client = JudgeClient(settings=build_test_settings(), transport=httpx.MockTransport(handler))
+
+    evaluation, token_usage, latency_ms, model = asyncio.run(
+        client.evaluate(prompt="Judge this retrieval context.")
+    )
+
+    assert evaluation.context_relevance.score == 2
+    assert evaluation.answer_relevance.score == 0
+    assert token_usage.total_tokens == 30
+    assert latency_ms >= 0
+    assert model == "gpt-4.1-mini"
+
+
 def test_llm_service_routes_openrouter_models_to_openrouter_client() -> None:
     class FakeClient:
         def __init__(self, response: LLMResponse) -> None:
