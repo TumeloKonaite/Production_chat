@@ -5,7 +5,7 @@ import json
 from time import perf_counter
 
 from app.config import Settings
-from app.infrastructure.llm import ModelRegistry, OpenAIClient
+from app.infrastructure.llm import ModelRegistry, OpenAIClient, build_default_model_config
 from app.services.llm.errors import LLMConfigurationError, LLMServiceError
 from app.services.retrieval.errors import InvalidRerankerResultError
 from app.services.retrieval.types import RetrievedChunk
@@ -40,6 +40,7 @@ class LLMReranker:
         self._model_registry = model_registry or ModelRegistry(
             default_model_config_id=settings.default_model_config_id,
             model_configs_json=settings.model_configs_json,
+            default_model_config=build_default_model_config(settings),
         )
         self._clients = clients or {
             "openai": OpenAIClient.from_settings(settings, provider="openai"),

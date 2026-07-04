@@ -30,6 +30,10 @@ DEFAULT_PROMPTS_DIR = ROOT_DIR / "app" / "infrastructure" / "prompts" / "templat
 DEFAULT_TEMPERATURE = 0.2
 
 
+def _safe_file_stem(value: str) -> str:
+    return "".join(character if character.isalnum() or character in {"-", "_", "."} else "_" for character in value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the shared chatbot eval dataset across multiple configured models.",
@@ -128,7 +132,7 @@ async def main() -> None:
         }
         result_payloads.append(result_payload)
 
-        result_path = args.output_dir / f"{model_config_id.replace(':', '_')}_model_eval_{timestamp}.json"
+        result_path = args.output_dir / f"{_safe_file_stem(model_config_id)}_model_eval_{timestamp}.json"
         write_json(result_path, result_payload)
 
         with tracker.run(model_config_id):

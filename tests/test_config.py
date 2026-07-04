@@ -9,6 +9,7 @@ from app.config import (
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
+    SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_RERANKER_TYPES,
     SUPPORTED_RETRIEVER_TYPES,
     get_settings,
@@ -41,6 +42,29 @@ def test_get_settings_uses_custom_openai_base_url(monkeypatch: pytest.MonkeyPatc
 
     assert settings.openai_base_url == "https://openrouter.ai/api/v1"
     assert settings.openrouter_base_url == "https://openrouter.ai/api/v1/custom"
+
+
+def test_get_settings_uses_generic_llm_provider_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-3.5-sonnet")
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1/")
+    monkeypatch.setenv("LLM_API_KEY", "generic-key")
+    monkeypatch.setenv("LLM_PROMPT_COST_PER_1M_TOKENS", "3.0")
+    monkeypatch.setenv("LLM_COMPLETION_COST_PER_1M_TOKENS", "15.0")
+
+    settings = get_settings()
+
+    assert settings.default_model_config_id == "openrouter:anthropic/claude-3.5-sonnet"
+    assert settings.llm_provider == "openrouter"
+    assert settings.llm_model == "anthropic/claude-3.5-sonnet"
+    assert settings.llm_base_url == "https://openrouter.ai/api/v1"
+    assert settings.llm_api_key == "generic-key"
+    assert settings.openrouter_api_key == "generic-key"
+    assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
+    assert settings.llm_prompt_cost_per_1m_tokens == 3.0
+    assert settings.llm_completion_cost_per_1m_tokens == 15.0
 
 
 def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,6 +189,16 @@ def test_get_settings_rejects_invalid_reranker_type(
 
     supported_values = ", ".join(sorted(SUPPORTED_RERANKER_TYPES))
     with pytest.raises(ValueError, match=f"RERANKER_TYPE must be one of: {supported_values}."):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_llm_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+
+    supported_values = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+    with pytest.raises(ValueError, match=f"LLM_PROVIDER must be one of: {supported_values}."):
         get_settings()
 
 

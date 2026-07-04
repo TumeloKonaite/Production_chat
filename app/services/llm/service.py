@@ -5,11 +5,13 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.infrastructure.llm import (
+    CostEstimate,
     LLMChatMessage,
     ModelConfig,
     ModelRegistry,
     OpenAIClient,
     TokenUsage,
+    build_default_model_config,
 )
 from app.services.llm.errors import LLMConfigurationError
 
@@ -25,7 +27,9 @@ class LLMGeneratedResponse:
     retrieval_config: str
     latency_ms: int | None
     token_usage: TokenUsage
-    estimated_cost_usd: float | None
+    estimated_prompt_cost_usd: float | None = None
+    estimated_completion_cost_usd: float | None = None
+    estimated_cost_usd: float | None = None
 
 
 class LLMService:
@@ -34,6 +38,7 @@ class LLMService:
         self._model_registry = ModelRegistry(
             default_model_config_id=settings.default_model_config_id,
             model_configs_json=settings.model_configs_json,
+            default_model_config=build_default_model_config(settings),
         )
         self._clients = {
             "openai": OpenAIClient.from_settings(settings, provider="openai"),
@@ -50,6 +55,22 @@ class LLMService:
 
     def get_model_config(self, model_config_id: str | None = None) -> ModelConfig:
         return self._model_registry.resolve(model_config_id)
+
+    def get_model_base_url(self, model_config_id: str | None = None) -> str:
+        model_config = self.get_model_config(model_config_id)
+        client = self._clients.get(model_config.provider)
+        if client is None:
+            raise LLMConfigurationError(
+                f"No LLM client configured for provider: {model_config.provider}"
+            )
+        return client.base_url
+
+    def estimate_costs(
+        self,
+        model_config_id: str,
+        token_usage: TokenUsage,
+    ) -> CostEstimate:
+        return self._model_registry.estimate_costs(model_config_id, token_usage)
 
     async def generate_response(
         self,
@@ -76,6 +97,15 @@ class LLMService:
             model=model_config.model,
             temperature=temperature,
         )
+        token_usage = TokenUsage(
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            total_tokens=response.total_tokens,
+        )
+        cost_estimate = self._model_registry.estimate_costs(
+            model_config.config_id,
+            token_usage,
+        )
 
         return LLMGeneratedResponse(
             message=response.content,
@@ -86,17 +116,8 @@ class LLMService:
             prompt_version=prompt_version,
             retrieval_config=retrieval_config,
             latency_ms=response.latency_ms,
-            token_usage=TokenUsage(
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                total_tokens=response.total_tokens,
-            ),
-            estimated_cost_usd=self._model_registry.estimate_cost(
-                model_config.config_id,
-                TokenUsage(
-                    input_tokens=response.input_tokens,
-                    output_tokens=response.output_tokens,
-                    total_tokens=response.total_tokens,
-                ),
-            ),
+            token_usage=token_usage,
+            estimated_prompt_cost_usd=cost_estimate.prompt_cost_usd,
+            estimated_completion_cost_usd=cost_estimate.completion_cost_usd,
+            estimated_cost_usd=cost_estimate.total_cost_usd,
         )

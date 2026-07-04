@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
+from app.config import Settings
 from app.services.llm.errors import LLMConfigurationError
 
 SUPPORTED_MODEL_PROVIDERS = {"openai", "openrouter"}
@@ -14,8 +15,8 @@ class ModelConfig:
     config_id: str
     provider: str
     model: str
-    input_cost_per_1m_tokens: float
-    output_cost_per_1m_tokens: float
+    input_cost_per_1m_tokens: float | None = None
+    output_cost_per_1m_tokens: float | None = None
 
 
 class ModelConfigValidationError(LLMConfigurationError):
@@ -44,6 +45,16 @@ def load_model_configs(model_configs_json: str | None = None) -> dict[str, Model
     model_configs = dict(MODEL_CONFIGS)
     model_configs.update(parse_model_configs_json(model_configs_json))
     return model_configs
+
+
+def build_default_model_config(settings: Settings) -> ModelConfig:
+    return ModelConfig(
+        config_id=settings.default_model_config_id,
+        provider=settings.llm_provider,
+        model=settings.llm_model,
+        input_cost_per_1m_tokens=settings.llm_prompt_cost_per_1m_tokens,
+        output_cost_per_1m_tokens=settings.llm_completion_cost_per_1m_tokens,
+    )
 
 
 def parse_model_configs_json(model_configs_json: str | None) -> dict[str, ModelConfig]:
@@ -76,8 +87,8 @@ def _parse_model_config(index: int, entry: object) -> ModelConfig:
     config_id = _require_string(entry, "config_id", index)
     provider = _require_provider(entry, index)
     model = _require_string(entry, "model", index)
-    input_cost = _require_number(entry, "input_cost_per_1m_tokens", index)
-    output_cost = _require_number(entry, "output_cost_per_1m_tokens", index)
+    input_cost = _require_optional_number(entry, "input_cost_per_1m_tokens", index)
+    output_cost = _require_optional_number(entry, "output_cost_per_1m_tokens", index)
 
     return ModelConfig(
         config_id=config_id,
@@ -107,8 +118,10 @@ def _require_provider(entry: dict[str, Any], index: int) -> str:
     return provider
 
 
-def _require_number(entry: dict[str, Any], field_name: str, index: int) -> float:
+def _require_optional_number(entry: dict[str, Any], field_name: str, index: int) -> float | None:
     value = entry.get(field_name)
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ModelConfigValidationError(
             f"MODEL_CONFIGS_JSON entry {index} field '{field_name}' must be a number."

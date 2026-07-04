@@ -101,6 +101,12 @@ POSTGRES_DB=production_chatbot
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4.1-mini
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=
+LLM_PROMPT_COST_PER_1M_TOKENS=
+LLM_COMPLETION_COST_PER_1M_TOKENS=
 OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENROUTER_API_KEY=
@@ -138,7 +144,7 @@ DAGSHUB_REPO_NAME=
 DAGSHUB_TOKEN=
 ```
 
-`OPENAI_MODEL` is still supported as a legacy fallback, but `DEFAULT_MODEL_CONFIG_ID` is the preferred way to select the runtime model.
+`LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, and `LLM_API_KEY` are the preferred generic runtime settings. `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, and `OPENROUTER_BASE_URL` remain supported so one backend can still keep both provider paths configured at the same time. `OPENAI_MODEL` is still accepted as a legacy fallback.
 
 ## Local setup
 
@@ -422,6 +428,10 @@ That means one running backend can send:
 Base environment variables:
 
 ```env
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4.1-mini
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=...
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENROUTER_API_KEY=<openrouter-api-key>
@@ -429,10 +439,17 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 ```
 
+When `LLM_PROVIDER` and `LLM_MODEL` are set, they define the active default runtime model config and take precedence over `.env` defaults for that provider path.
 The built-in model configs use `provider: "openai"` and continue to call OpenAI directly by default.
 To evaluate OpenRouter-backed models in the same backend, add model configs with `provider: "openrouter"`:
 
 ```env
+LLM_PROVIDER=openrouter
+LLM_MODEL=anthropic/claude-3.5-sonnet
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=<openrouter-api-key>
+LLM_PROMPT_COST_PER_1M_TOKENS=3.0
+LLM_COMPLETION_COST_PER_1M_TOKENS=15.0
 DEFAULT_MODEL_CONFIG_ID=openrouter:anthropic/claude-3.5-sonnet
 MODEL_CONFIGS_JSON=[
   {
@@ -445,7 +462,7 @@ MODEL_CONFIGS_JSON=[
 ]
 ```
 
-`LLM_BASE_URL` is still accepted as a fallback alias for `OPENAI_BASE_URL`, but only for the OpenAI provider path. OpenRouter uses `OPENROUTER_BASE_URL`.
+For backwards compatibility, the provider-specific variables still work on their own. The generic `LLM_*` values are the preferred single-model experiment path, while `MODEL_CONFIGS_JSON` remains the way to register additional named configs for comparisons.
 
 ### Embedding provider configuration
 
@@ -552,6 +569,46 @@ python evals/run_model_eval.py \
   --dataset evals/datasets/model_eval_dataset.jsonl \
   --experiment-name personal-chatbot-model-comparison
 ```
+
+The fixed-context generation comparison workflow:
+
+```bash
+uv run python evals/run_generation_eval.py \
+  --dataset evals/datasets/generation_eval_dataset.jsonl \
+  --prompt-version v1_professional
+```
+
+OpenAI example:
+
+```bash
+LLM_PROVIDER=openai \
+LLM_MODEL=gpt-4.1-mini \
+LLM_BASE_URL=https://api.openai.com/v1 \
+uv run python evals/run_generation_eval.py --prompt-version v1_professional
+```
+
+OpenRouter example:
+
+```bash
+LLM_PROVIDER=openrouter \
+LLM_MODEL=anthropic/claude-3.5-sonnet \
+LLM_BASE_URL=https://openrouter.ai/api/v1 \
+LLM_PROMPT_COST_PER_1M_TOKENS=3.0 \
+LLM_COMPLETION_COST_PER_1M_TOKENS=15.0 \
+uv run python evals/run_generation_eval.py --prompt-version v1_professional
+```
+
+This runner keeps retrieval fixed by loading context directly from the dataset, then logs:
+
+- `llm_provider`
+- `llm_model`
+- `llm_base_url`
+- quality and groundedness metrics
+- latency average, p50, and p95
+- prompt, completion, and total token counts where available
+- estimated prompt, completion, and total cost where configured
+
+When the active generation model uses `provider: "openrouter"` and the selected model config does not already include token pricing, `evals/run_generation_eval.py` now looks up the model automatically with OpenRouter's single-model endpoint and uses `data.pricing.prompt` and `data.pricing.completion` to estimate cost. Those API values are documented by OpenRouter as USD per token and are converted to USD per 1M tokens inside the runner.
 
 The RAG evaluation workflow:
 

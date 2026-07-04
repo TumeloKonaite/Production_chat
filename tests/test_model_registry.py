@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.infrastructure.llm import ModelRegistry, TokenUsage, UnknownModelError
+from app.infrastructure.llm import CostEstimate, ModelConfig, ModelRegistry, TokenUsage, UnknownModelError
 from app.infrastructure.llm.model_config import ModelConfigValidationError, load_model_configs
 
 
@@ -37,6 +37,39 @@ def test_model_registry_estimates_cost_from_token_usage() -> None:
     assert cost == pytest.approx(0.000768)
 
 
+def test_model_registry_returns_cost_breakdown() -> None:
+    registry = ModelRegistry(default_model_config_id="openai:gpt-4.1-mini")
+
+    estimate = registry.estimate_costs(
+        "openai:gpt-4.1-mini",
+        TokenUsage(input_tokens=1200, output_tokens=180, total_tokens=1380),
+    )
+
+    assert estimate == CostEstimate(
+        prompt_cost_usd=pytest.approx(0.00048),
+        completion_cost_usd=pytest.approx(0.000288),
+        total_cost_usd=pytest.approx(0.000768),
+    )
+
+
+def test_model_registry_preserves_existing_costs_when_default_override_has_none() -> None:
+    registry = ModelRegistry(
+        default_model_config_id="openai:gpt-4.1-mini",
+        default_model_config=ModelConfig(
+            config_id="openai:gpt-4.1-mini",
+            provider="openai",
+            model="gpt-4.1-mini",
+        ),
+    )
+
+    estimate = registry.estimate_costs(
+        "openai:gpt-4.1-mini",
+        TokenUsage(input_tokens=1200, output_tokens=180, total_tokens=1380),
+    )
+
+    assert estimate.total_cost_usd == pytest.approx(0.000768)
+
+
 def test_model_registry_loads_custom_model_configs_from_json() -> None:
     registry = ModelRegistry(
         default_model_config_id="openai:gpt-4.1-mini",
@@ -58,6 +91,31 @@ def test_model_registry_loads_custom_model_configs_from_json() -> None:
     assert model.config_id == "openrouter:anthropic/claude-3.5-sonnet"
     assert model.provider == "openrouter"
     assert model.model == "anthropic/claude-3.5-sonnet"
+
+
+def test_model_registry_allows_costless_custom_model_configs() -> None:
+    registry = ModelRegistry(
+        default_model_config_id="openrouter:google/gemini-2.5-flash",
+        model_configs_json=json.dumps(
+            [
+                {
+                    "config_id": "openrouter:google/gemini-2.5-flash",
+                    "provider": "openrouter",
+                    "model": "google/gemini-2.5-flash",
+                }
+            ]
+        ),
+    )
+
+    model = registry.get_model("openrouter:google/gemini-2.5-flash")
+    estimate = registry.estimate_costs(
+        "openrouter:google/gemini-2.5-flash",
+        TokenUsage(input_tokens=100, output_tokens=20, total_tokens=120),
+    )
+
+    assert model.input_cost_per_1m_tokens is None
+    assert model.output_cost_per_1m_tokens is None
+    assert estimate == CostEstimate(None, None, None)
 
 
 def test_model_registry_resolves_custom_default_model_config_id() -> None:

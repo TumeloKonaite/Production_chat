@@ -164,6 +164,14 @@ Only change existing benchmark rows when:
 
 ## Other eval datasets
 
+`evals/datasets/generation_eval_dataset.jsonl` is the fixed-context generation
+comparison dataset used by `evals/run_generation_eval.py`.
+
+Its role is model-to-model answer comparison while holding retrieval constant.
+Each row includes the question plus the exact retrieved context that every
+model should see for that example. Prefer this dataset when the experiment goal
+is answer quality, latency, token usage, or cost comparison across providers.
+
 `evals/datasets/model_eval_dataset.jsonl` is not the canonical RAG benchmark.
 It is a separate legacy-style dataset used by `evals/run_model_eval.py`, which
 still evaluates responses with the older `expected_facts` contract in
@@ -187,6 +195,7 @@ prompts here.
 The three active datasets should stay intentionally distinct:
 
 - `portfolio_eval_dataset.jsonl`: canonical source-grounded RAG benchmark.
+- `generation_eval_dataset.jsonl`: fixed-context generation benchmark.
 - `model_eval_dataset.jsonl`: legacy exact-fact smoke test for model runs.
 - `prompt_eval_questions.jsonl`: prompt behavior and response-style probes.
 

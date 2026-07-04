@@ -5,10 +5,12 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 from app.config import Settings
 from app.infrastructure.llm import JudgeClient, OpenAIClient, normalize_llm_text
 from app.infrastructure.llm.base import LLMChatMessage, LLMResponse
+from app.services.llm import LLMServiceError
 from app.services.llm.service import LLMService
 
 
@@ -18,7 +20,20 @@ def build_test_settings(
     openrouter_base_url: str = "https://openrouter.ai/api/v1",
     default_model_config_id: str = "openai:gpt-4.1-mini",
     model_configs_json: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    llm_base_url: str | None = None,
+    llm_api_key: str | None = None,
+    llm_prompt_cost_per_1m_tokens: float | None = None,
+    llm_completion_cost_per_1m_tokens: float | None = None,
 ) -> Settings:
+    inferred_provider, inferred_model = default_model_config_id.split(":", 1)
+    resolved_llm_provider = llm_provider or inferred_provider
+    resolved_llm_model = llm_model or inferred_model
+    resolved_llm_base_url = llm_base_url or (
+        openrouter_base_url if resolved_llm_provider == "openrouter" else openai_base_url
+    )
+
     return Settings(
         database_url="sqlite:///unused-for-tests.db",
         openai_api_key="test-key",
@@ -52,6 +67,12 @@ def build_test_settings(
         dagshub_repo_owner=None,
         dagshub_repo_name=None,
         dagshub_token=None,
+        llm_provider=resolved_llm_provider,
+        llm_model=resolved_llm_model,
+        llm_base_url=resolved_llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_prompt_cost_per_1m_tokens=llm_prompt_cost_per_1m_tokens,
+        llm_completion_cost_per_1m_tokens=llm_completion_cost_per_1m_tokens,
     )
 
 
@@ -272,6 +293,30 @@ def test_llm_service_routes_openrouter_models_to_openrouter_client() -> None:
     assert response.model_config_id == "openrouter:anthropic/claude-3.5-sonnet"
 
 
+def test_llm_service_builds_default_model_from_generic_llm_settings() -> None:
+    service = LLMService(
+        settings=build_test_settings(
+            default_model_config_id="openrouter:google/gemini-2.5-flash",
+            model_configs_json=None,
+            llm_provider="openrouter",
+            llm_model="google/gemini-2.5-flash",
+            llm_base_url="https://openrouter.ai/api/v1",
+            llm_api_key="generic-openrouter-key",
+            llm_prompt_cost_per_1m_tokens=0.3,
+            llm_completion_cost_per_1m_tokens=2.5,
+        )
+    )
+
+    model = service.get_model_config()
+
+    assert model.config_id == "openrouter:google/gemini-2.5-flash"
+    assert model.provider == "openrouter"
+    assert model.model == "google/gemini-2.5-flash"
+    assert model.input_cost_per_1m_tokens == 0.3
+    assert model.output_cost_per_1m_tokens == 2.5
+    assert service.get_model_base_url() == "https://openrouter.ai/api/v1"
+
+
 def test_normalize_llm_text_repairs_mojibake_and_unicode_punctuation() -> None:
     normalized = normalize_llm_text(
         "Hello, welcome to Tumelo Konaite\u00e2\u20ac\u2122s "
@@ -319,3 +364,35 @@ def test_openai_client_normalizes_response_text() -> None:
     )
 
     assert response.content == "Hello, welcome to Tumelo Konaite's portfolio-I'm here."
+
+
+def test_openai_client_surfaces_http_status_and_response_excerpt() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Incorrect API key provided.",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    client = OpenAIClient.from_settings(
+        build_test_settings(),
+        provider="openai",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMServiceError) as exc_info:
+        asyncio.run(
+            client.generate(
+                [LLMChatMessage(role="user", content="Test message")],
+                model="gpt-4.1-mini",
+            )
+        )
+
+    assert "HTTP 401" in str(exc_info.value)
+    assert "https://api.openai.com/v1/chat/completions" in str(exc_info.value)
+    assert "Incorrect API key provided." in str(exc_info.value)
