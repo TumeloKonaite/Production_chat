@@ -50,6 +50,9 @@ class RagEvalQuestionResult:
     judge_evaluation: JudgeEvaluation
     latency_ms: int
     token_usage: dict[str, int | None]
+    answer_estimated_prompt_cost_usd: float | None = None
+    answer_estimated_completion_cost_usd: float | None = None
+    answer_estimated_cost_usd: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,3 +72,9 @@ class RagEvalRunSummary:
     avg_context_relevance: float
     avg_faithfulness: float
     avg_answer_relevance: float
+    latency_ms_avg: float
+    latency_ms_p50: float
+    latency_ms_p95: float
+    estimated_total_cost_usd: float | None
+    average_cost_per_question_usd: float | None
+    questions_with_cost_estimate: int

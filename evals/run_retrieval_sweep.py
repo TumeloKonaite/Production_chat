@@ -251,6 +251,7 @@ def run_retrieval_sweep(
         run_results.append(run_result)
         comparison_rows.append(build_sweep_result_row(experiment=experiment, run_result=run_result))
 
+    ranked_rows = rank_sweep_rows(comparison_rows)
     manifest_path = write_retrieval_sweep_manifest(
         output_dir=resolved_output_dir,
         sweep_config=sweep_config,
@@ -261,10 +262,17 @@ def run_retrieval_sweep(
     )
     artifact_paths = write_retrieval_sweep_comparison_artifacts(
         output_dir=resolved_output_dir,
-        rows=comparison_rows,
+        rows=ranked_rows,
         manifest_path=manifest_path,
     )
-    return comparison_rows, artifact_paths
+    _log_summary_to_tracker(
+        tracker=tracker,
+        run_name=f"retrieval-sweep-summary-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        rows=ranked_rows,
+        artifact_paths=artifact_paths,
+        settings=settings,
+    )
+    return ranked_rows, artifact_paths
 
 
 def build_experiment_settings(
@@ -317,14 +325,18 @@ def build_sweep_result_row(
     return {
         "run_name": run_result.run_name,
         "experiment_name": experiment.name,
+        "chunk_size": run_result.config.get("chunk_size"),
+        "chunk_overlap": run_result.config.get("chunk_overlap"),
         "retriever_type": experiment.retriever_type,
         "top_k": experiment.top_k,
         "embedding_provider": run_result.config.get("embedding_provider"),
         "embedding_model": run_result.config.get("embedding_model"),
         "embedding_dimension": run_result.config.get("embedding_dimension"),
+        "query_rewriting": run_result.config.get("query_rewriting"),
         "query_rewriting_enabled": run_result.config.get("query_rewriting_enabled"),
         "query_rewrite_model": run_result.config.get("query_rewrite_model"),
         "query_rewrite_prompt_version": run_result.config.get("query_rewrite_prompt_version"),
+        "reranker": run_result.config.get("reranker"),
         "reranker_enabled": run_result.config.get("reranker_enabled"),
         "reranker_type": run_result.config.get("reranker_type"),
         "reranker_model": run_result.config.get("reranker_model"),
@@ -334,6 +346,7 @@ def build_sweep_result_row(
         "git_commit_sha": run_result.config.get("git_commit_sha"),
         "mrr": summary.get("mrr"),
         "recall_at_k": summary.get("recall_at_k"),
+        "precision_at_k": summary.get("precision_at_k", summary.get("mean_precision_at_k")),
         "mean_precision_at_k": summary.get("mean_precision_at_k"),
         "hit_at_k": summary.get("hit_at_k"),
         "context_relevance": summary.get("context_relevance"),
@@ -347,11 +360,33 @@ def build_sweep_result_row(
         "query_rewrite_failure_count": summary.get("query_rewrite_failure_count"),
         "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens"),
         "query_rewrite_estimated_total_cost": summary.get("query_rewrite_estimated_total_cost"),
+        "mlflow_run_id": run_result.mlflow_run_id,
         "output_dir": str(run_result.output_dir),
         "results_json": str(run_result.artifact_paths["results_json"]),
         "results_csv": str(run_result.artifact_paths["results_csv"]),
         "config_json": str(run_result.artifact_paths["config_json"]),
     }
+
+
+def rank_sweep_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked_runs = sorted(
+        rows,
+        key=lambda item: (
+            _sort_metric(item.get("recall_at_k")),
+            _sort_metric(item.get("mrr")),
+            _sort_metric(item.get("precision_at_k")),
+            _sort_metric(item.get("hit_at_k")),
+        ),
+        reverse=True,
+    )
+    best_row = ranked_runs[0] if ranked_runs else None
+    ranked_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(ranked_runs, start=1):
+        ranked_row = dict(row)
+        ranked_row["rank"] = index
+        ranked_row["is_best"] = best_row is not None and row is best_row
+        ranked_rows.append(ranked_row)
+    return ranked_rows
 
 
 def write_retrieval_sweep_manifest(
@@ -408,12 +443,18 @@ def write_retrieval_sweep_comparison_artifacts(
     rows: list[dict[str, Any]],
     manifest_path: Path,
 ) -> dict[str, Path]:
-    comparison_json_path = output_dir / "retrieval_sweep_comparison.json"
-    comparison_csv_path = output_dir / "retrieval_sweep_comparison.csv"
+    comparison_json_path = output_dir / "retrieval_sweep_summary.json"
+    comparison_csv_path = output_dir / "retrieval_sweep_summary.csv"
+    comparison_table_path = output_dir / "retrieval_sweep_ranking.md"
 
     payload = {
         "generated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         "sweep_manifest_path": str(manifest_path),
+        "ranking": {
+            "primary_metric": "recall_at_k",
+            "tiebreak_metrics": ["mrr", "precision_at_k", "hit_at_k"],
+        },
+        "best_configuration": next((row for row in rows if row.get("is_best")), None),
         "runs": rows,
     }
     comparison_json_path.write_text(
@@ -422,16 +463,22 @@ def write_retrieval_sweep_comparison_artifacts(
     )
 
     fieldnames = [
+        "rank",
+        "is_best",
         "run_name",
         "experiment_name",
+        "chunk_size",
+        "chunk_overlap",
         "retriever_type",
         "top_k",
         "embedding_provider",
         "embedding_model",
         "embedding_dimension",
+        "query_rewriting",
         "query_rewriting_enabled",
         "query_rewrite_model",
         "query_rewrite_prompt_version",
+        "reranker",
         "reranker_enabled",
         "reranker_type",
         "reranker_model",
@@ -441,6 +488,7 @@ def write_retrieval_sweep_comparison_artifacts(
         "git_commit_sha",
         "mrr",
         "recall_at_k",
+        "precision_at_k",
         "mean_precision_at_k",
         "hit_at_k",
         "context_relevance",
@@ -454,6 +502,7 @@ def write_retrieval_sweep_comparison_artifacts(
         "query_rewrite_failure_count",
         "query_rewrite_total_tokens",
         "query_rewrite_estimated_total_cost",
+        "mlflow_run_id",
         "output_dir",
         "results_json",
         "results_csv",
@@ -465,32 +514,45 @@ def write_retrieval_sweep_comparison_artifacts(
         for row in rows:
             writer.writerow({name: row.get(name) for name in fieldnames})
 
+    comparison_table_path.write_text(format_retrieval_sweep_summary(rows), encoding="utf-8")
+
     return {
-        "comparison_json": comparison_json_path,
-        "comparison_csv": comparison_csv_path,
+        "summary_json": comparison_json_path,
+        "summary_csv": comparison_csv_path,
+        "ranking_md": comparison_table_path,
         "manifest_json": manifest_path,
     }
 
 
 def format_retrieval_sweep_summary(rows: list[dict[str, Any]]) -> str:
     headers = [
+        "rank",
         "run_name",
+        "embedding_model",
+        "chunk_size",
+        "chunk_overlap",
         "retriever_type",
         "top_k",
-        "mrr",
         "recall_at_k",
-        "mean_precision_at_k",
-        "context_relevance",
+        "mrr",
+        "precision_at_k",
+        "query_rewriting",
+        "reranker",
     ]
     rendered_rows = [
         [
+            str(row.get("rank", "")),
             str(row.get("run_name", "")),
+            str(row.get("embedding_model", "")),
+            str(row.get("chunk_size", "")),
+            str(row.get("chunk_overlap", "")),
             str(row.get("retriever_type", "")),
             str(row.get("top_k", "")),
-            _format_metric(row.get("mrr")),
             _format_metric(row.get("recall_at_k")),
-            _format_metric(row.get("mean_precision_at_k")),
-            _format_metric(row.get("context_relevance")),
+            _format_metric(row.get("mrr")),
+            _format_metric(row.get("precision_at_k")),
+            str(row.get("query_rewriting", "")),
+            str(row.get("reranker", "")),
         ]
         for row in rows
     ]
@@ -506,7 +568,7 @@ def format_retrieval_sweep_summary(rows: list[dict[str, Any]]) -> str:
     separator = "| " + " | ".join("-" * width for width in widths) + " |"
     lines = [render_row(headers), separator]
     lines.extend(render_row(rendered_row) for rendered_row in rendered_rows)
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def main() -> None:
@@ -536,10 +598,21 @@ def main() -> None:
     print()
     print("Retrieval sweep completed")
     print()
+    if rows:
+        best_row = rows[0]
+        print(
+            "Best configuration: "
+            f"{best_row['experiment_name']} "
+            f"(Recall@{best_row['top_k']}={_format_metric(best_row.get('recall_at_k'))}, "
+            f"MRR={_format_metric(best_row.get('mrr'))}, "
+            f"Precision@{best_row['top_k']}={_format_metric(best_row.get('precision_at_k'))})"
+        )
+        print()
     print(format_retrieval_sweep_summary(rows))
     print()
-    print(f"Comparison JSON written to: {artifact_paths['comparison_json']}")
-    print(f"Comparison CSV written to: {artifact_paths['comparison_csv']}")
+    print(f"Summary JSON written to: {artifact_paths['summary_json']}")
+    print(f"Summary CSV written to: {artifact_paths['summary_csv']}")
+    print(f"Ranking table written to: {artifact_paths['ranking_md']}")
     print(f"Manifest JSON written to: {artifact_paths['manifest_json']}")
 
 
@@ -593,9 +666,56 @@ def _format_metric(value: object) -> str:
     return ""
 
 
+def _sort_metric(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float("-inf")
+
+
 def _slugify_label(value: str) -> str:
     normalized = SAFE_LABEL_PATTERN.sub("-", value.strip().casefold()).strip("-")
     return normalized or "run"
+
+
+def _log_summary_to_tracker(
+    *,
+    tracker,
+    run_name: str,
+    rows: list[dict[str, Any]],
+    artifact_paths: dict[str, Path],
+    settings: Settings,
+) -> None:
+    if (
+        not tracker.enabled
+        or not rows
+        or not hasattr(tracker, "run")
+        or not hasattr(tracker, "log_params")
+        or not hasattr(tracker, "log_metrics")
+        or not hasattr(tracker, "log_artifact")
+    ):
+        return
+
+    best_row = rows[0]
+    with tracker.run(run_name):
+        tracker.log_params(
+            {
+                "workflow": "retrieval_sweep",
+                "experiment_count": len(rows),
+                "query_rewriting": settings.enable_query_rewriting,
+                "reranker": (
+                    settings.reranker_type if getattr(settings, "enable_reranking", False) else "none"
+                ),
+            }
+        )
+        tracker.log_metrics(
+            {
+                "best_recall_at_k": float(best_row.get("recall_at_k") or 0.0),
+                "best_mrr": float(best_row.get("mrr") or 0.0),
+                "best_precision_at_k": float(best_row.get("precision_at_k") or 0.0),
+            }
+        )
+        for artifact_path in artifact_paths.values():
+            tracker.log_artifact(artifact_path)
 
 
 if __name__ == "__main__":

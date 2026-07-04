@@ -7,9 +7,11 @@ from types import SimpleNamespace
 from app.config import Settings
 from app.services.retrieval import RetrievedChunk
 from scripts.run_embedding_experiment import (
+    EmbeddingRunConfig,
     build_embedding_comparison_rows,
     load_embedding_experiment_config,
     run_embedding_experiment_matrix,
+    _validate_vector_store_dimension,
     write_embedding_comparison_artifacts,
 )
 
@@ -52,6 +54,9 @@ class FakeRetrievalService:
                 ],
             }
         return list(responses.get(query, []))
+
+    def get_vector_store_dimension(self) -> int | None:
+        return 384
 
 
 def test_load_embedding_experiment_config_normalizes_and_sorts_values(tmp_path: Path) -> None:
@@ -157,12 +162,13 @@ def test_write_embedding_comparison_artifacts_persists_best_setup(tmp_path: Path
         experiment_manifest_path=manifest_path,
     )
 
-    payload = json.loads(artifact_paths["comparison_json"].read_text(encoding="utf-8"))
+    payload = json.loads(artifact_paths["summary_json"].read_text(encoding="utf-8"))
     assert payload["best_embedding_setup"]["embedding_provider"] == "openrouter"
-    assert payload["ranking"]["primary_metric"] == "mrr"
-    csv_text = artifact_paths["comparison_csv"].read_text(encoding="utf-8")
+    assert payload["ranking"]["primary_metric"] == "recall_at_k"
+    csv_text = artifact_paths["summary_csv"].read_text(encoding="utf-8")
     assert "embedding_provider" in csv_text
     assert "openrouter" in csv_text
+    assert artifact_paths["ranking_md"].exists()
 
 
 def test_run_embedding_experiment_matrix_writes_ranked_results(
@@ -220,6 +226,10 @@ def test_run_embedding_experiment_matrix_writes_ranked_results(
         lambda: (lambda: FakeSession()),
     )
     monkeypatch.setattr(
+        "scripts.run_embedding_experiment._get_database_vector_store_dimension",
+        lambda: None,
+    )
+    monkeypatch.setattr(
         "scripts.run_embedding_experiment.RetrievalService",
         FakeRetrievalService,
     )
@@ -249,13 +259,32 @@ def test_run_embedding_experiment_matrix_writes_ranked_results(
     assert rows[0]["recall_at_1"] == 1.0
     assert rows[1]["embedding_provider"] == "hf"
 
-    payload = json.loads(artifact_paths["comparison_json"].read_text(encoding="utf-8"))
+    payload = json.loads(artifact_paths["summary_json"].read_text(encoding="utf-8"))
     assert payload["best_embedding_setup"]["embedding_provider"] == "openrouter"
     assert payload["best_embedding_setup"]["mrr"] == 1.0
     assert payload["runs"][1]["embedding_provider"] == "hf"
 
     run_results = list((tmp_path / "output" / "runs").glob("*/results.json"))
     assert len(run_results) == 2
+
+
+def test_validate_vector_store_dimension_fails_early_for_pgvector_mismatch() -> None:
+    try:
+        _validate_vector_store_dimension(
+            embedding_run=EmbeddingRunConfig(
+                provider="openrouter",
+                model="openai/text-embedding-3-small",
+                dimension=1536,
+            ),
+            database_vector_dimension=384,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        assert "Database vector dimension mismatch" in message
+        assert "Configured dimension: 1536" in message
+        assert "Database vector store dimension: 384" in message
+    else:
+        raise AssertionError("Expected early pgvector dimension validation to fail.")
 
 
 def _build_settings() -> Settings:

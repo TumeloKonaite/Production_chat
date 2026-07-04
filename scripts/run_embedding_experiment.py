@@ -10,11 +10,14 @@ import re
 import sys
 from typing import Any
 
+from sqlalchemy import text
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings, get_settings
+from app.infrastructure.tracking import create_experiment_tracker
 from app.knowledge.ingestion import ingest_knowledge, prepare_knowledge_ingestion_storage
 from app.repositories.db.session import get_engine, get_session_factory
 from app.services.retrieval import RetrievalService
@@ -25,6 +28,7 @@ from evals.run_retrieval_eval import (
     evaluate_examples_for_k_values,
     format_dataset_validation_summary,
     load_and_validate_dataset,
+    log_run_to_tracker,
 )
 
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results" / "embedding_experiments"
@@ -137,6 +141,8 @@ def run_embedding_experiment_matrix(
     min_expected_source_coverage: float = DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
 ) -> tuple[list[dict[str, Any]], dict[str, Path]]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
+    database_vector_dimension = _get_database_vector_store_dimension()
     examples, validation_summary = load_and_validate_dataset(
         dataset_path,
         min_expected_source_coverage=min_expected_source_coverage,
@@ -153,6 +159,10 @@ def run_embedding_experiment_matrix(
             embedding_provider=embedding_run.provider,
             knowledge_embedding_model=embedding_run.model,
             embedding_dimension=embedding_run.dimension,
+        )
+        _validate_vector_store_dimension(
+            embedding_run=embedding_run,
+            database_vector_dimension=database_vector_dimension,
         )
         retrieval_service = RetrievalService(settings=run_settings)
         timestamp = datetime.now().astimezone().replace(microsecond=0).isoformat()
@@ -196,15 +206,27 @@ def run_embedding_experiment_matrix(
             config=config,
             k_values=experiment_config.k_values,
         )
+        mlflow_run_id = log_run_to_tracker(
+            tracker=tracker,
+            settings=run_settings,
+            dataset_path=dataset_path,
+            top_k=max(experiment_config.k_values),
+            summary=summary,
+            config=config,
+            artifact_paths=artifact_paths,
+            run_name=timestamp_label,
+        )
 
         comparison_rows.append(
             build_embedding_result_row(
                 embedding_run=embedding_run,
                 summary=summary,
+                config=config,
                 documents_loaded=len(documents),
                 chunks_indexed=chunks_indexed,
                 run_output_dir=run_output_dir,
                 artifact_paths=artifact_paths,
+                mlflow_run_id=mlflow_run_id,
             )
         )
 
@@ -226,6 +248,14 @@ def run_embedding_experiment_matrix(
         k_values=experiment_config.k_values,
         experiment_manifest_path=manifest_path,
     )
+    _log_summary_to_tracker(
+        tracker=tracker,
+        run_name=f"embedding-experiment-summary-{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        rows=ranked_rows,
+        artifact_paths=comparison_paths,
+        settings=settings,
+        top_k=max(experiment_config.k_values),
+    )
     return ranked_rows, comparison_paths
 
 
@@ -233,19 +263,31 @@ def build_embedding_result_row(
     *,
     embedding_run: EmbeddingRunConfig,
     summary: dict[str, Any],
+    config: dict[str, Any],
     documents_loaded: int,
     chunks_indexed: int,
     run_output_dir: Path,
     artifact_paths: dict[str, Path],
+    mlflow_run_id: str | None,
 ) -> dict[str, Any]:
+    top_k = int(summary.get("k", max(summary.get("k_values", [1]))))
     row = {
         "embedding_provider": embedding_run.provider,
         "embedding_model": embedding_run.model,
         "embedding_dimension": embedding_run.dimension,
+        "chunk_size": config.get("chunk_size"),
+        "chunk_overlap": config.get("chunk_overlap"),
+        "retriever_type": config.get("retriever_type"),
+        "top_k": top_k,
+        "query_rewriting": config.get("query_rewriting"),
+        "reranker": config.get("reranker"),
         "documents_loaded": documents_loaded,
         "chunks_indexed": chunks_indexed,
         "k_values": list(summary.get("k_values", [])),
+        "recall_at_k": summary.get("recall_at_k"),
+        "precision_at_k": summary.get("precision_at_k"),
         "mrr": summary.get("mrr"),
+        "mlflow_run_id": mlflow_run_id,
         "run_output_dir": str(run_output_dir),
         "results_json": str(artifact_paths["results_json"]),
         "results_csv": str(artifact_paths["results_csv"]),
@@ -330,15 +372,16 @@ def write_embedding_comparison_artifacts(
     experiment_manifest_path: Path,
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "embedding_comparison.json"
-    csv_path = output_dir / "embedding_comparison.csv"
+    json_path = output_dir / "embedding_experiment_summary.json"
+    csv_path = output_dir / "embedding_experiment_summary.csv"
+    table_path = output_dir / "embedding_experiment_ranking.md"
 
     payload = {
         "generated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         "best_embedding_setup": next((row for row in rows if row["is_best"]), None),
         "ranking": {
-            "primary_metric": "mrr",
-            "tiebreak_metrics": [f"recall_at_{k}" for k in _build_ranking_k_values(k_values)],
+            "primary_metric": "recall_at_k",
+            "tiebreak_metrics": ["mrr", "precision_at_k", *[f"recall_at_{k}" for k in _build_ranking_k_values(k_values)]],
         },
         "experiment_manifest_path": str(experiment_manifest_path),
         "runs": rows,
@@ -351,10 +394,19 @@ def write_embedding_comparison_artifacts(
         "embedding_provider",
         "embedding_model",
         "embedding_dimension",
+        "chunk_size",
+        "chunk_overlap",
+        "retriever_type",
+        "top_k",
+        "query_rewriting",
+        "reranker",
         "documents_loaded",
         "chunks_indexed",
+        "recall_at_k",
+        "precision_at_k",
         "mrr",
         *[f"recall_at_{k}" for k in k_values],
+        "mlflow_run_id",
         "run_output_dir",
         "results_json",
         "results_csv",
@@ -366,7 +418,13 @@ def write_embedding_comparison_artifacts(
         for row in rows:
             writer.writerow({name: row.get(name) for name in fieldnames})
 
-    return {"comparison_json": json_path, "comparison_csv": csv_path}
+    table_path.write_text(format_embedding_summary_table(rows), encoding="utf-8")
+
+    return {
+        "summary_json": json_path,
+        "summary_csv": csv_path,
+        "ranking_md": table_path,
+    }
 
 
 def write_experiment_manifest(
@@ -415,15 +473,18 @@ def main() -> None:
 
     settings = get_settings()
     prepare_knowledge_ingestion_storage(get_engine())
-    rows, artifact_paths = run_embedding_experiment_matrix(
-        experiment_config=experiment_config,
-        experiment_config_path=config_path,
-        dataset_path=dataset_path,
-        output_dir=experiment_output_dir,
-        settings=settings,
-        argv=sys.argv,
-        min_expected_source_coverage=args.min_expected_source_coverage,
-    )
+    try:
+        rows, artifact_paths = run_embedding_experiment_matrix(
+            experiment_config=experiment_config,
+            experiment_config_path=config_path,
+            dataset_path=dataset_path,
+            output_dir=experiment_output_dir,
+            settings=settings,
+            argv=sys.argv,
+            min_expected_source_coverage=args.min_expected_source_coverage,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     best_row = rows[0]
     best_recall_k = 5 if 5 in experiment_config.k_values else max(experiment_config.k_values)
@@ -431,10 +492,14 @@ def main() -> None:
         "Best embedding setup: "
         f"{best_row['embedding_provider']}/{best_row['embedding_model']}"
     )
-    print(f"MRR: {best_row['mrr']}")
     print(f"Recall@{best_recall_k}: {best_row.get(f'recall_at_{best_recall_k}')}")
-    print(f"Comparison JSON written to: {artifact_paths['comparison_json']}")
-    print(f"Comparison CSV written to: {artifact_paths['comparison_csv']}")
+    print(f"MRR: {best_row['mrr']}")
+    print(f"Precision@{best_row['top_k']}: {best_row.get('precision_at_k')}")
+    print()
+    print(format_embedding_summary_table(rows), end="")
+    print(f"Summary JSON written to: {artifact_paths['summary_json']}")
+    print(f"Summary CSV written to: {artifact_paths['summary_csv']}")
+    print(f"Ranking table written to: {artifact_paths['ranking_md']}")
 
 
 def _write_embedding_results_csv(
@@ -519,7 +584,7 @@ def _build_ranking_k_values(k_values: list[int]) -> list[int]:
 
 
 def _comparison_sort_key(run: dict[str, Any], ranking_k_values: list[int]) -> tuple[Any, ...]:
-    metric_keys = ["mrr", *[f"recall_at_{k}" for k in ranking_k_values]]
+    metric_keys = ["recall_at_k", "mrr", "precision_at_k", *[f"recall_at_{k}" for k in ranking_k_values]]
     return (
         *[_descending_metric_key(run.get(metric_key)) for metric_key in metric_keys],
         str(run.get("embedding_provider", "")),
@@ -547,9 +612,155 @@ def _normalize_k_values(raw_k_values: list[Any]) -> list[int]:
     return sorted(normalized)
 
 
+def _validate_vector_store_dimension(
+    *,
+    embedding_run: EmbeddingRunConfig,
+    database_vector_dimension: int | None,
+) -> None:
+    if (
+        database_vector_dimension is None
+        or database_vector_dimension == embedding_run.dimension
+    ):
+        return
+
+    raise ValueError(
+        "Database vector dimension mismatch for embedding experiment run "
+        f"{embedding_run.provider}/{embedding_run.model}. "
+        f"Configured dimension: {embedding_run.dimension}. "
+        f"Database vector store dimension: {database_vector_dimension}. "
+        "Update the embedding experiment config to match the pgvector schema, or run the "
+        "required database migration and rebuild the knowledge index before comparing this model."
+    )
+
+
+def _get_database_vector_store_dimension() -> int | None:
+    query = text(
+        """
+        SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type
+        FROM pg_attribute AS a
+        JOIN pg_class AS c
+          ON a.attrelid = c.oid
+        JOIN pg_namespace AS n
+          ON c.relnamespace = n.oid
+        WHERE c.relname = 'langchain_pg_embedding'
+          AND a.attname = 'embedding'
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+        ORDER BY CASE WHEN n.nspname = current_schema() THEN 0 ELSE 1 END, n.nspname
+        LIMIT 1
+        """
+    )
+    try:
+        with get_engine().connect() as connection:
+            embedding_type = connection.execute(query).scalar_one_or_none()
+    except Exception:
+        return None
+
+    if not isinstance(embedding_type, str):
+        return None
+
+    match = re.fullmatch(r"vector\((\d+)\)", embedding_type.strip())
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
 def _slugify_label(value: str) -> str:
     normalized = SAFE_LABEL_PATTERN.sub("_", value.strip().casefold()).strip("_")
     return normalized or "value"
+
+
+def format_embedding_summary_table(rows: list[dict[str, Any]]) -> str:
+    headers = [
+        "rank",
+        "embedding_provider",
+        "embedding_model",
+        "top_k",
+        "query_rewriting",
+        "reranker",
+        "recall_at_k",
+        "mrr",
+        "precision_at_k",
+    ]
+    rendered_rows = [
+        [
+            str(row.get("rank", "")),
+            str(row.get("embedding_provider", "")),
+            str(row.get("embedding_model", "")),
+            str(row.get("top_k", "")),
+            str(row.get("query_rewriting", "")),
+            str(row.get("reranker", "")),
+            _format_metric(row.get("recall_at_k")),
+            _format_metric(row.get("mrr")),
+            _format_metric(row.get("precision_at_k")),
+        ]
+        for row in rows
+    ]
+    widths = [
+        max(len(header), *(len(rendered_row[index]) for rendered_row in rendered_rows))
+        for index, header in enumerate(headers)
+    ]
+
+    def render_row(values: list[str]) -> str:
+        cells = [value.ljust(widths[index]) for index, value in enumerate(values)]
+        return "| " + " | ".join(cells) + " |"
+
+    separator = "| " + " | ".join("-" * width for width in widths) + " |"
+    lines = [render_row(headers), separator]
+    lines.extend(render_row(rendered_row) for rendered_row in rendered_rows)
+    return "\n".join(lines) + "\n"
+
+
+def _format_metric(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.3f}"
+    return ""
+
+
+def _log_summary_to_tracker(
+    *,
+    tracker,
+    run_name: str,
+    rows: list[dict[str, Any]],
+    artifact_paths: dict[str, Path],
+    settings: Settings,
+    top_k: int,
+) -> None:
+    if (
+        not tracker.enabled
+        or not rows
+        or not hasattr(tracker, "run")
+        or not hasattr(tracker, "log_params")
+        or not hasattr(tracker, "log_metrics")
+        or not hasattr(tracker, "log_artifact")
+    ):
+        return
+
+    best_row = rows[0]
+    with tracker.run(run_name):
+        tracker.log_params(
+            {
+                "workflow": "embedding_experiment",
+                "config_count": len(rows),
+                "chunk_size": settings.knowledge_chunk_size,
+                "chunk_overlap": settings.knowledge_chunk_overlap,
+                "retriever_type": settings.retriever_type,
+                "top_k": top_k,
+                "query_rewriting": settings.enable_query_rewriting,
+                "reranker": (
+                    settings.reranker_type if getattr(settings, "enable_reranking", False) else "none"
+                ),
+            }
+        )
+        tracker.log_metrics(
+            {
+                "best_recall_at_k": float(best_row.get("recall_at_k") or 0.0),
+                "best_mrr": float(best_row.get("mrr") or 0.0),
+                "best_precision_at_k": float(best_row.get("precision_at_k") or 0.0),
+            }
+        )
+        for artifact_path in artifact_paths.values():
+            tracker.log_artifact(artifact_path)
 
 
 if __name__ == "__main__":

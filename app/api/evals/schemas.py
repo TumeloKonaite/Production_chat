@@ -30,6 +30,10 @@ class RetrievalSweepExperimentRequest(BaseModel):
     embedding_dimension: int | None = Field(default=None, gt=0)
     chunk_size: int | None = Field(default=None, gt=0)
     chunk_overlap: int | None = Field(default=None, ge=0)
+    reranker_enabled: bool | None = None
+    reranker_type: Literal["none", "llm"] | None = None
+    reranker_model: str | None = Field(default=None, min_length=1, max_length=300)
+    reranker_initial_top_k: int | None = Field(default=None, gt=0, le=200)
 
 
 class RetrievalEvalSweepRequest(BaseModel):
