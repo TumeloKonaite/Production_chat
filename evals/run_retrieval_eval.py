@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from dataclasses import replace
 import sys
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -86,12 +87,30 @@ def parse_args() -> argparse.Namespace:
             "before evaluation runs."
         ),
     )
+    parser.add_argument(
+        "--enable-query-rewriting",
+        action="store_true",
+        help="Enable eval-only query rewriting before retrieval.",
+    )
+    parser.add_argument(
+        "--disable-query-rewriting",
+        action="store_true",
+        help="Disable eval-only query rewriting even if enabled in the environment.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     settings = get_settings()
+    if args.enable_query_rewriting and args.disable_query_rewriting:
+        raise SystemExit(
+            "Choose either --enable-query-rewriting or --disable-query-rewriting, not both."
+        )
+    if args.enable_query_rewriting:
+        settings = replace(settings, enable_query_rewriting=True)
+    elif args.disable_query_rewriting:
+        settings = replace(settings, enable_query_rewriting=False)
     top_k = args.k if args.k is not None else settings.retrieval_top_k
     tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
 
@@ -113,6 +132,9 @@ def main() -> None:
     print(f"Results JSON written to: {result.artifact_paths['results_json']}")
     print(f"Results CSV written to: {result.artifact_paths['results_csv']}")
     print(f"Config JSON written to: {result.artifact_paths['config_json']}")
+    prompt_artifact = result.artifact_paths.get("query_rewrite_prompt_txt")
+    if prompt_artifact is not None:
+        print(f"Query rewrite prompt written to: {prompt_artifact}")
 
 
 if __name__ == "__main__":

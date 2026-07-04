@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class RetrievalEvalRunRequest(BaseModel):
     retriever_type: Literal["vector", "keyword", "hybrid"] = "vector"
     top_k: int = Field(default=5, gt=0, le=50)
+    enable_query_rewriting: bool | None = None
     run_name: str | None = Field(default=None, min_length=1, max_length=200)
     notes: str | None = Field(default=None, min_length=1, max_length=2000)
 
@@ -33,6 +34,7 @@ class RetrievalSweepExperimentRequest(BaseModel):
 
 class RetrievalEvalSweepRequest(BaseModel):
     experiments: list[RetrievalSweepExperimentRequest] = Field(min_length=1)
+    enable_query_rewriting: bool | None = None
 
 
 class RetrievalEvalSweepRunResponse(BaseModel):

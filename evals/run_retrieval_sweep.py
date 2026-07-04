@@ -222,6 +222,7 @@ def run_retrieval_sweep(
         sweep_config=sweep_config,
         sweep_config_path=sweep_config_path.resolve(),
         dataset_path=resolved_dataset_path,
+        settings=settings,
         argv=argv,
     )
     artifact_paths = write_retrieval_sweep_comparison_artifacts(
@@ -282,6 +283,9 @@ def build_sweep_result_row(
         "embedding_provider": run_result.config.get("embedding_provider"),
         "embedding_model": run_result.config.get("embedding_model"),
         "embedding_dimension": run_result.config.get("embedding_dimension"),
+        "query_rewriting_enabled": run_result.config.get("query_rewriting_enabled"),
+        "query_rewrite_model": run_result.config.get("query_rewrite_model"),
+        "query_rewrite_prompt_version": run_result.config.get("query_rewrite_prompt_version"),
         "dataset_path": run_result.config.get("dataset_path"),
         "git_commit_sha": run_result.config.get("git_commit_sha"),
         "mrr": summary.get("mrr"),
@@ -291,6 +295,13 @@ def build_sweep_result_row(
         "num_queries_total": summary.get("num_queries_total"),
         "num_queries_evaluated": summary.get("num_queries_evaluated"),
         "num_queries_without_expected_source": summary.get("num_queries_without_expected_source"),
+        "query_rewrite_avg_latency_ms": summary.get("query_rewrite_avg_latency_ms"),
+        "query_rewrite_total_latency_ms": summary.get("query_rewrite_total_latency_ms"),
+        "query_rewrite_success_count": summary.get("query_rewrite_success_count"),
+        "query_rewrite_fallback_count": summary.get("query_rewrite_fallback_count"),
+        "query_rewrite_failure_count": summary.get("query_rewrite_failure_count"),
+        "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens"),
+        "query_rewrite_estimated_total_cost": summary.get("query_rewrite_estimated_total_cost"),
         "output_dir": str(run_result.output_dir),
         "results_json": str(run_result.artifact_paths["results_json"]),
         "results_csv": str(run_result.artifact_paths["results_csv"]),
@@ -304,6 +315,7 @@ def write_retrieval_sweep_manifest(
     sweep_config: RetrievalSweepConfig,
     sweep_config_path: Path,
     dataset_path: Path,
+    settings: Settings,
     argv: list[str],
 ) -> Path:
     manifest_path = output_dir / "sweep_manifest.json"
@@ -324,6 +336,11 @@ def write_retrieval_sweep_manifest(
             }
             for experiment in sweep_config.experiments
         ],
+        "query_rewriting_enabled": settings.enable_query_rewriting,
+        "query_rewrite_model": settings.query_rewrite_model if settings.enable_query_rewriting else None,
+        "query_rewrite_prompt_version": (
+            settings.query_rewrite_prompt_version if settings.enable_query_rewriting else None
+        ),
         "python_command_used": str(sys.executable) + " " + " ".join(argv),
     }
     manifest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -357,6 +374,9 @@ def write_retrieval_sweep_comparison_artifacts(
         "embedding_provider",
         "embedding_model",
         "embedding_dimension",
+        "query_rewriting_enabled",
+        "query_rewrite_model",
+        "query_rewrite_prompt_version",
         "dataset_path",
         "git_commit_sha",
         "mrr",
@@ -366,6 +386,13 @@ def write_retrieval_sweep_comparison_artifacts(
         "num_queries_total",
         "num_queries_evaluated",
         "num_queries_without_expected_source",
+        "query_rewrite_avg_latency_ms",
+        "query_rewrite_total_latency_ms",
+        "query_rewrite_success_count",
+        "query_rewrite_fallback_count",
+        "query_rewrite_failure_count",
+        "query_rewrite_total_tokens",
+        "query_rewrite_estimated_total_cost",
         "output_dir",
         "results_json",
         "results_csv",

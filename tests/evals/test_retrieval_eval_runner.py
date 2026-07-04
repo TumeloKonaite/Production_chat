@@ -6,6 +6,12 @@ from types import SimpleNamespace
 
 from app.services.retrieval import RetrievedChunk
 import pytest
+from evals.query_rewriter import (
+    QUERY_REWRITE_STATUS_EMPTY_FALLBACK,
+    QUERY_REWRITE_STATUS_ERROR_FALLBACK,
+    QUERY_REWRITE_STATUS_SUCCESS,
+    QueryRewriteResult,
+)
 from evals.run_retrieval_eval import (
     RetrievalEvalExample,
     RetrievalEvalDatasetValidationError,
@@ -17,6 +23,8 @@ from evals.run_retrieval_eval import (
     format_dataset_validation_summary,
     load_and_validate_dataset,
     log_run_to_tracker,
+    parse_args,
+    run_retrieval_eval,
     validate_dataset_examples,
     write_artifacts,
 )
@@ -65,6 +73,21 @@ class FakeTracker:
         self.artifacts.append(artifact_path)
 
 
+class FakeQueryRewriter:
+    def __init__(self, results: dict[str, QueryRewriteResult]) -> None:
+        self._results = results
+        self.calls: list[tuple[str, str | None]] = []
+
+    def rewrite_query(
+        self,
+        original_query: str,
+        *,
+        context: str | None = None,
+    ) -> QueryRewriteResult:
+        self.calls.append((original_query, context))
+        return self._results[original_query]
+
+
 def build_chunk(*, chunk_id: str, source: str, similarity: float = 0.9) -> RetrievedChunk:
     return RetrievedChunk(
         id=chunk_id,
@@ -73,6 +96,38 @@ def build_chunk(*, chunk_id: str, source: str, similarity: float = 0.9) -> Retri
         content=f"content from {source}",
         similarity=similarity,
         metadata={"chunk_id": chunk_id, "source": source},
+    )
+
+
+def build_query_rewrite_result(
+    *,
+    original_query: str,
+    query_used_for_retrieval: str,
+    status: str,
+    rewritten_query: str | None = None,
+    rewrite_context: str | None = None,
+    error: str | None = None,
+    latency_ms: int | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    estimated_cost: float | None = None,
+) -> QueryRewriteResult:
+    return QueryRewriteResult(
+        original_query=original_query,
+        rewrite_context=rewrite_context,
+        rewritten_query=rewritten_query,
+        query_used_for_retrieval=query_used_for_retrieval,
+        query_rewriting_enabled=True,
+        query_rewrite_status=status,
+        query_rewrite_model="gpt-4.1-mini",
+        query_rewrite_prompt_version="v1",
+        query_rewrite_latency_ms=latency_ms,
+        query_rewrite_prompt_tokens=prompt_tokens,
+        query_rewrite_completion_tokens=completion_tokens,
+        query_rewrite_total_tokens=total_tokens,
+        query_rewrite_estimated_cost=estimated_cost,
+        query_rewrite_error=error,
     )
 
 
@@ -114,7 +169,20 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
         "recall_at_k": 1.0,
         "mean_precision_at_k": 0.5,
         "mrr": 1.0,
+        "query_rewrite_total_latency_ms": 0,
+        "query_rewrite_avg_latency_ms": 0.0,
+        "query_rewrite_success_count": 0,
+        "query_rewrite_fallback_count": 0,
+        "query_rewrite_failure_count": 0,
+        "query_rewrite_total_prompt_tokens": 0,
+        "query_rewrite_total_completion_tokens": 0,
+        "query_rewrite_total_tokens": 0,
+        "query_rewrite_estimated_total_cost": 0.0,
     }
+    assert results[0]["original_query"] == "question 1"
+    assert results[0]["rewritten_query"] is None
+    assert results[0]["query_rewrite_status"] == "disabled"
+    assert results[0]["query_used_for_retrieval"] == "question 1"
     assert results[0]["retrieved_sources"] == ["projects.md", "skills.md"]
     assert results[0]["retrieved_chunk_ids"] == ["projects.md::chunk-1", "skills.md::chunk-1"]
     assert results[0]["first_relevant_rank"] == 1
@@ -239,6 +307,15 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
         "recall_at_k": 1.0,
         "mean_precision_at_k": 1.0,
         "mrr": 1.0,
+        "query_rewrite_total_latency_ms": 0,
+        "query_rewrite_avg_latency_ms": 0.0,
+        "query_rewrite_success_count": 0,
+        "query_rewrite_fallback_count": 0,
+        "query_rewrite_failure_count": 0,
+        "query_rewrite_total_prompt_tokens": 0,
+        "query_rewrite_total_completion_tokens": 0,
+        "query_rewrite_total_tokens": 0,
+        "query_rewrite_estimated_total_cost": 0.0,
     }
     results = [
         {
@@ -256,7 +333,12 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
             "first_relevant_rank": 1,
         }
     ]
-    config = {"timestamp": "2026-07-02T20:30:00+02:00", "top_k": 5}
+    config = {
+        "timestamp": "2026-07-02T20:30:00+02:00",
+        "top_k": 5,
+        "query_rewriting_enabled": False,
+        "query_rewrite_prompt_version": "v1",
+    }
 
     artifact_paths = write_artifacts(output_dir, summary=summary, results=results, config=config)
 
@@ -268,6 +350,7 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
     assert "retrieved_chunk_ids" in csv_text
     assert "projects.md::chunk-1" in csv_text
     assert json.loads(artifact_paths["config_json"].read_text(encoding="utf-8")) == config
+    assert "query_rewrite_prompt_txt" not in artifact_paths
 
 
 def test_build_run_config_captures_retrieval_settings() -> None:
@@ -286,6 +369,12 @@ def test_build_run_config_captures_retrieval_settings() -> None:
             "knowledge_chunk_size": 500,
             "knowledge_chunk_overlap": 100,
             "database_url": "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/test",
+            "enable_query_rewriting": True,
+            "query_rewrite_model": "openai:gpt-4.1-mini",
+            "query_rewrite_temperature": 0.0,
+            "query_rewrite_prompt_version": "v1",
+            "query_rewrite_timeout_seconds": 10,
+            "query_rewrite_max_tokens": 128,
         },
     )()
 
@@ -307,6 +396,8 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["retriever_type"] == "vector"
     assert config["vector_store_type"] == "pgvector"
     assert config["retrieval_strategy"] == "vector"
+    assert config["query_rewriting_enabled"] is True
+    assert config["query_rewrite_model"] == "openai:gpt-4.1-mini"
     assert config["chunk_size"] == 500
     assert config["chunk_overlap"] == 100
     assert config["settings_used_by_retriever"]["retriever_type"] == "vector"
@@ -357,6 +448,12 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "chunk_size": 500,
             "chunk_overlap": 100,
             "git_commit_sha": "abc123",
+            "query_rewriting_enabled": True,
+            "query_rewrite_model": "openai:gpt-4.1-mini",
+            "query_rewrite_temperature": 0.0,
+            "query_rewrite_prompt_version": "v1",
+            "query_rewrite_timeout_seconds": 10,
+            "query_rewrite_max_tokens": 128,
         },
         artifact_paths=artifact_paths,
         run_name=build_tracking_run_name(
@@ -385,6 +482,12 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "chunk_overlap": 100,
             "retrieval_min_similarity": 0.55,
             "git_commit_sha": "abc123",
+            "query_rewriting_enabled": True,
+            "query_rewrite_model": "openai:gpt-4.1-mini",
+            "query_rewrite_temperature": 0.0,
+            "query_rewrite_prompt_version": "v1",
+            "query_rewrite_timeout_seconds": 10,
+            "query_rewrite_max_tokens": 128,
         }
     ]
     assert tracker.metrics == [
@@ -397,6 +500,15 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "recall_at_k": 1.0,
             "mean_precision_at_k": 0.5,
             "mrr": 1.0,
+            "query_rewrite_total_latency_ms": 0,
+            "query_rewrite_avg_latency_ms": 0.0,
+            "query_rewrite_success_count": 0,
+            "query_rewrite_fallback_count": 0,
+            "query_rewrite_failure_count": 0,
+            "query_rewrite_total_prompt_tokens": 0,
+            "query_rewrite_total_completion_tokens": 0,
+            "query_rewrite_total_tokens": 0,
+            "query_rewrite_estimated_total_cost": 0.0,
         }
     ]
     assert tracker.artifacts == list(artifact_paths.values())
@@ -442,6 +554,221 @@ def test_evaluate_examples_for_k_values_reports_multi_k_summary() -> None:
     assert summary["metrics_by_k"]["1"]["recall_at_k"] == 0.5
     assert summary["metrics_by_k"]["3"]["recall_at_k"] == 1.0
     assert summary["mrr"] == 0.75
+    assert summary["query_rewrite_total_latency_ms"] == 0
     assert results[0]["metrics_by_k"]["1"]["hit_at_k"] == 1.0
     assert results[1]["metrics_by_k"]["1"]["hit_at_k"] == 0.0
     assert results[1]["metrics_by_k"]["3"]["recall_at_k"] == 1.0
+
+
+def test_evaluate_examples_uses_rewritten_query_when_query_rewriting_succeeds() -> None:
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="What does he do?",
+            expected_source_documents=["profile.md"],
+            rewrite_context="Subject: Tumelo Konaite",
+        )
+    ]
+    retrieval_service = FakeRetrievalService(
+        {
+            "What does Tumelo Konaite do?": [
+                build_chunk(chunk_id="profile.md::chunk-1", source="profile.md"),
+            ]
+        }
+    )
+    query_rewriter = FakeQueryRewriter(
+        {
+            "What does he do?": build_query_rewrite_result(
+                original_query="What does he do?",
+                rewrite_context="Subject: Tumelo Konaite",
+                rewritten_query="What does Tumelo Konaite do?",
+                query_used_for_retrieval="What does Tumelo Konaite do?",
+                status=QUERY_REWRITE_STATUS_SUCCESS,
+                latency_ms=412,
+                prompt_tokens=80,
+                completion_tokens=9,
+                total_tokens=89,
+                estimated_cost=0.000012,
+            )
+        }
+    )
+
+    summary, results = evaluate_examples(
+        examples,
+        retrieval_service,
+        k=5,
+        query_rewriter=query_rewriter,
+    )
+
+    assert query_rewriter.calls == [("What does he do?", "Subject: Tumelo Konaite")]
+    assert retrieval_service.calls == [("What does Tumelo Konaite do?", 5)]
+    assert results[0]["original_query"] == "What does he do?"
+    assert results[0]["rewritten_query"] == "What does Tumelo Konaite do?"
+    assert results[0]["query_used_for_retrieval"] == "What does Tumelo Konaite do?"
+    assert results[0]["query_rewrite_status"] == "success"
+    assert summary["query_rewrite_success_count"] == 1
+    assert summary["query_rewrite_total_tokens"] == 89
+
+
+def test_evaluate_examples_falls_back_to_original_query_when_rewrite_is_empty() -> None:
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="What does Tumelo do?",
+            expected_source_documents=["profile.md"],
+        )
+    ]
+    retrieval_service = FakeRetrievalService(
+        {
+            "What does Tumelo do?": [
+                build_chunk(chunk_id="profile.md::chunk-1", source="profile.md"),
+            ]
+        }
+    )
+    query_rewriter = FakeQueryRewriter(
+        {
+            "What does Tumelo do?": build_query_rewrite_result(
+                original_query="What does Tumelo do?",
+                query_used_for_retrieval="What does Tumelo do?",
+                status=QUERY_REWRITE_STATUS_EMPTY_FALLBACK,
+                error="Query rewrite returned an empty response.",
+            )
+        }
+    )
+
+    summary, results = evaluate_examples(
+        examples,
+        retrieval_service,
+        k=5,
+        query_rewriter=query_rewriter,
+    )
+
+    assert retrieval_service.calls == [("What does Tumelo do?", 5)]
+    assert results[0]["rewritten_query"] is None
+    assert results[0]["query_rewrite_status"] == "empty_fallback"
+    assert results[0]["query_rewrite_error"] == "Query rewrite returned an empty response."
+    assert summary["query_rewrite_fallback_count"] == 1
+    assert summary["query_rewrite_failure_count"] == 0
+
+
+def test_evaluate_examples_falls_back_to_original_query_when_rewrite_errors() -> None:
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="What does Tumelo do?",
+            expected_source_documents=["profile.md"],
+        )
+    ]
+    retrieval_service = FakeRetrievalService(
+        {
+            "What does Tumelo do?": [
+                build_chunk(chunk_id="profile.md::chunk-1", source="profile.md"),
+            ]
+        }
+    )
+    query_rewriter = FakeQueryRewriter(
+        {
+            "What does Tumelo do?": build_query_rewrite_result(
+                original_query="What does Tumelo do?",
+                query_used_for_retrieval="What does Tumelo do?",
+                status=QUERY_REWRITE_STATUS_ERROR_FALLBACK,
+                error="LLM request failed",
+            )
+        }
+    )
+
+    summary, results = evaluate_examples(
+        examples,
+        retrieval_service,
+        k=5,
+        query_rewriter=query_rewriter,
+    )
+
+    assert retrieval_service.calls == [("What does Tumelo do?", 5)]
+    assert results[0]["query_rewrite_status"] == "error_fallback"
+    assert results[0]["query_rewrite_error"] == "LLM request failed"
+    assert summary["query_rewrite_fallback_count"] == 1
+    assert summary["query_rewrite_failure_count"] == 1
+
+
+def test_run_retrieval_eval_with_query_rewriting_disabled_uses_original_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retrieval_service = FakeRetrievalService(
+        {
+            "question 1": [build_chunk(chunk_id="projects.md::chunk-1", source="projects.md")],
+        }
+    )
+
+    monkeypatch.setattr(
+        "evals.retrieval_eval_runner.RetrievalService",
+        lambda settings: retrieval_service,
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("QueryRewriter should not be constructed when rewriting is disabled.")
+
+    monkeypatch.setattr("evals.retrieval_eval_runner.QueryRewriter", fail_if_called)
+
+    settings = type(
+        "Settings",
+        (),
+        {
+            "retriever_type": "vector",
+            "embedding_provider": "hf",
+            "knowledge_embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
+            "default_retrieval_config": "default",
+            "retrieval_top_k": 5,
+            "retrieval_min_similarity": 0.55,
+            "knowledge_collection_name": "personal_knowledge_base",
+            "knowledge_chunk_size": 500,
+            "knowledge_chunk_overlap": 100,
+            "database_url": "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/test",
+            "enable_query_rewriting": False,
+            "query_rewrite_model": "openai:gpt-4.1-mini",
+            "query_rewrite_temperature": 0.0,
+            "query_rewrite_prompt_version": "v1",
+            "query_rewrite_timeout_seconds": 10,
+            "query_rewrite_max_tokens": 128,
+        },
+    )()
+    examples = [
+        RetrievalEvalExample(
+            id="q1",
+            question="question 1",
+            expected_source_documents=["projects.md"],
+        )
+    ]
+    validation_summary = validate_dataset_examples(examples, min_expected_source_coverage=1.0)
+
+    result = run_retrieval_eval(
+        settings=settings,
+        dataset_path=tmp_path / "dataset.jsonl",
+        output_root=tmp_path / "output",
+        top_k=5,
+        tracker=FakeTracker(enabled=False),
+        argv=["evals/run_retrieval_eval.py"],
+        examples=examples,
+        validation_summary=validation_summary,
+        timestamp="2026-07-04T12:00:00+02:00",
+        timestamp_label="2026-07-04_120000",
+    )
+
+    assert retrieval_service.calls == [("question 1", 5)]
+    assert result.results[0]["query_rewrite_status"] == "disabled"
+    assert result.results[0]["rewritten_query"] is None
+    assert "query_rewrite_prompt_txt" not in result.artifact_paths
+
+
+def test_parse_args_accepts_query_rewriting_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["evals/run_retrieval_eval.py", "--enable-query-rewriting"],
+    )
+
+    args = parse_args()
+
+    assert args.enable_query_rewriting is True
+    assert args.disable_query_rewriting is False

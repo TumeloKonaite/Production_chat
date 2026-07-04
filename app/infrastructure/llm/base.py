@@ -35,5 +35,7 @@ class LLMClient(Protocol):
         *,
         model: str,
         temperature: float | None = None,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
         ...

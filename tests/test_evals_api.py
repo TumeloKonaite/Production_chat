@@ -61,6 +61,12 @@ def build_test_settings() -> Settings:
         dagshub_repo_owner=None,
         dagshub_repo_name=None,
         dagshub_token=None,
+        enable_query_rewriting=False,
+        query_rewrite_model="openai:gpt-4.1-mini",
+        query_rewrite_temperature=0.0,
+        query_rewrite_prompt_version="v1",
+        query_rewrite_timeout_seconds=10,
+        query_rewrite_max_tokens=128,
     )
 
 
@@ -92,6 +98,13 @@ class FakeRetrievalEvalRunner:
                 "num_queries_total": 25,
                 "num_queries_evaluated": 24,
                 "num_queries_without_expected_source": 1,
+                "query_rewrite_avg_latency_ms": 0.0,
+                "query_rewrite_total_latency_ms": 0,
+                "query_rewrite_success_count": 0,
+                "query_rewrite_fallback_count": 0,
+                "query_rewrite_failure_count": 0,
+                "query_rewrite_total_tokens": 0,
+                "query_rewrite_estimated_total_cost": 0.0,
             },
             results=[],
             config={
@@ -101,6 +114,9 @@ class FakeRetrievalEvalRunner:
                 "embedding_provider": "hf",
                 "embedding_model": "all-MiniLM-L6-v2",
                 "embedding_dimension": 384,
+                "query_rewriting_enabled": False,
+                "query_rewrite_model": "openai:gpt-4.1-mini",
+                "query_rewrite_prompt_version": "v1",
                 "notes": "Triggered from protected backend API",
             },
             artifact_paths={
@@ -132,6 +148,9 @@ class FakeRetrievalSweepRunner:
                 "embedding_provider": "hf",
                 "embedding_model": "all-MiniLM-L6-v2",
                 "embedding_dimension": 384,
+                "query_rewriting_enabled": False,
+                "query_rewrite_model": None,
+                "query_rewrite_prompt_version": None,
                 "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
                 "git_commit_sha": "abc123",
                 "mrr": 0.62,
@@ -141,6 +160,13 @@ class FakeRetrievalSweepRunner:
                 "num_queries_total": 25,
                 "num_queries_evaluated": 24,
                 "num_queries_without_expected_source": 1,
+                "query_rewrite_avg_latency_ms": 0.0,
+                "query_rewrite_total_latency_ms": 0,
+                "query_rewrite_success_count": 0,
+                "query_rewrite_fallback_count": 0,
+                "query_rewrite_failure_count": 0,
+                "query_rewrite_total_tokens": 0,
+                "query_rewrite_estimated_total_cost": 0.0,
                 "output_dir": "evals/results/retrieval_sweeps/run_01",
                 "results_json": "evals/results/retrieval_sweeps/run_01/results.json",
                 "results_csv": "evals/results/retrieval_sweeps/run_01/results.csv",
@@ -154,6 +180,9 @@ class FakeRetrievalSweepRunner:
                 "embedding_provider": "hf",
                 "embedding_model": "all-MiniLM-L6-v2",
                 "embedding_dimension": 384,
+                "query_rewriting_enabled": False,
+                "query_rewrite_model": None,
+                "query_rewrite_prompt_version": None,
                 "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
                 "git_commit_sha": "abc123",
                 "mrr": 0.54,
@@ -163,6 +192,13 @@ class FakeRetrievalSweepRunner:
                 "num_queries_total": 25,
                 "num_queries_evaluated": 24,
                 "num_queries_without_expected_source": 1,
+                "query_rewrite_avg_latency_ms": 0.0,
+                "query_rewrite_total_latency_ms": 0,
+                "query_rewrite_success_count": 0,
+                "query_rewrite_fallback_count": 0,
+                "query_rewrite_failure_count": 0,
+                "query_rewrite_total_tokens": 0,
+                "query_rewrite_estimated_total_cost": 0.0,
                 "output_dir": "evals/results/retrieval_sweeps/run_02",
                 "results_json": "evals/results/retrieval_sweeps/run_02/results.json",
                 "results_csv": "evals/results/retrieval_sweeps/run_02/results.csv",
@@ -258,6 +294,9 @@ def test_retrieval_eval_run_calls_shared_runner_and_returns_result() -> None:
             "embedding_provider": "hf",
             "embedding_model": "all-MiniLM-L6-v2",
             "embedding_dimension": 384,
+            "query_rewriting_enabled": False,
+            "query_rewrite_model": "openai:gpt-4.1-mini",
+            "query_rewrite_prompt_version": "v1",
             "notes": "Triggered from protected backend API",
         },
         "metrics": {
@@ -268,6 +307,13 @@ def test_retrieval_eval_run_calls_shared_runner_and_returns_result() -> None:
             "num_queries_total": 25,
             "num_queries_evaluated": 24,
             "num_queries_without_expected_source": 1,
+            "query_rewrite_avg_latency_ms": 0.0,
+            "query_rewrite_total_latency_ms": 0,
+            "query_rewrite_success_count": 0,
+            "query_rewrite_fallback_count": 0,
+            "query_rewrite_failure_count": 0,
+            "query_rewrite_total_tokens": 0,
+            "query_rewrite_estimated_total_cost": 0.0,
         },
     }
     assert len(fake_tracker_factory.calls) == 1
@@ -281,6 +327,30 @@ def test_retrieval_eval_run_calls_shared_runner_and_returns_result() -> None:
     assert fake_runner.calls[0]["run_name"] == "api-vector-k5-baseline"
     assert fake_runner.calls[0]["notes"] == "Triggered from protected backend API"
     assert fake_runner.calls[0]["argv"] == ["api:/api/evals/retrieval-runs"]
+
+
+def test_retrieval_eval_run_allows_query_rewriting_override() -> None:
+    fake_runner = FakeRetrievalEvalRunner()
+    fake_tracker_factory = FakeTrackerFactory()
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_retrieval_eval_runner] = lambda: fake_runner
+    app.dependency_overrides[get_experiment_tracker_factory] = lambda: fake_tracker_factory
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/evals/retrieval-runs",
+        headers={"x-eval-admin-token": "eval-secret"},
+        json={
+            "retriever_type": "vector",
+            "top_k": 5,
+            "enable_query_rewriting": True,
+        },
+    )
+
+    assert response.status_code == 200
+    tracker_settings, _ = fake_tracker_factory.calls[0]
+    assert tracker_settings.enable_query_rewriting is True
+    assert fake_runner.calls[0]["settings"].enable_query_rewriting is True
 
 
 def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
@@ -314,6 +384,9 @@ def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
                     "embedding_provider": "hf",
                     "embedding_model": "all-MiniLM-L6-v2",
                     "embedding_dimension": 384,
+                    "query_rewriting_enabled": False,
+                    "query_rewrite_model": None,
+                    "query_rewrite_prompt_version": None,
                     "git_commit_sha": "abc123",
                 },
                 "metrics": {
@@ -324,6 +397,13 @@ def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
                     "num_queries_total": 25,
                     "num_queries_evaluated": 24,
                     "num_queries_without_expected_source": 1,
+                    "query_rewrite_avg_latency_ms": 0.0,
+                    "query_rewrite_total_latency_ms": 0,
+                    "query_rewrite_success_count": 0,
+                    "query_rewrite_fallback_count": 0,
+                    "query_rewrite_failure_count": 0,
+                    "query_rewrite_total_tokens": 0,
+                    "query_rewrite_estimated_total_cost": 0.0,
                 },
                 "artifacts": {
                     "output_dir": "evals/results/retrieval_sweeps/run_01",
@@ -342,6 +422,9 @@ def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
                     "embedding_provider": "hf",
                     "embedding_model": "all-MiniLM-L6-v2",
                     "embedding_dimension": 384,
+                    "query_rewriting_enabled": False,
+                    "query_rewrite_model": None,
+                    "query_rewrite_prompt_version": None,
                     "git_commit_sha": "abc123",
                 },
                 "metrics": {
@@ -352,6 +435,13 @@ def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
                     "num_queries_total": 25,
                     "num_queries_evaluated": 24,
                     "num_queries_without_expected_source": 1,
+                    "query_rewrite_avg_latency_ms": 0.0,
+                    "query_rewrite_total_latency_ms": 0,
+                    "query_rewrite_success_count": 0,
+                    "query_rewrite_fallback_count": 0,
+                    "query_rewrite_failure_count": 0,
+                    "query_rewrite_total_tokens": 0,
+                    "query_rewrite_estimated_total_cost": 0.0,
                 },
                 "artifacts": {
                     "output_dir": "evals/results/retrieval_sweeps/run_02",
@@ -374,6 +464,28 @@ def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
         "retrieval-keyword-k5",
     ]
     assert fake_runner.calls[0]["argv"] == ["api:/api/evals/retrieval-sweeps"]
+    assert fake_runner.calls[0]["settings"].enable_query_rewriting is False
+
+
+def test_retrieval_eval_sweep_allows_query_rewriting_override() -> None:
+    fake_runner = FakeRetrievalSweepRunner()
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_retrieval_sweep_runner] = lambda: fake_runner
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/evals/retrieval-sweeps",
+        headers={"x-eval-admin-token": "eval-secret"},
+        json={
+            "enable_query_rewriting": True,
+            "experiments": [
+                {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_runner.calls[0]["settings"].enable_query_rewriting is True
 
 
 def test_retrieval_eval_sweep_rejects_duplicate_experiment_names() -> None:

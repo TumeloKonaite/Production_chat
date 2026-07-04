@@ -51,6 +51,12 @@ class Settings:
     dagshub_token: str | None
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
+    enable_query_rewriting: bool = False
+    query_rewrite_model: str = "openai:gpt-4.1-mini"
+    query_rewrite_temperature: float = 0.0
+    query_rewrite_prompt_version: str = "v1"
+    query_rewrite_timeout_seconds: int = 10
+    query_rewrite_max_tokens: int = 128
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -79,6 +85,23 @@ def _get_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
 
     if minimum is not None and value < minimum:
         comparator = "greater than 0" if minimum == 1 else f"greater than or equal to {minimum}"
+        raise ValueError(f"{name} must be {comparator}.")
+
+    return value
+
+
+def _get_float_env(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number.") from exc
+
+    if minimum is not None and value < minimum:
+        comparator = "greater than or equal to 0" if minimum == 0 else f"greater than or equal to {minimum}"
         raise ValueError(f"{name} must be {comparator}.")
 
     return value
@@ -180,4 +203,32 @@ def get_settings() -> Settings:
         dagshub_repo_owner=os.getenv("DAGSHUB_REPO_OWNER"),
         dagshub_repo_name=os.getenv("DAGSHUB_REPO_NAME"),
         dagshub_token=os.getenv("DAGSHUB_TOKEN"),
+        enable_query_rewriting=_parse_bool(
+            os.getenv("ENABLE_QUERY_REWRITING"),
+            default=False,
+        ),
+        query_rewrite_model=(
+            _get_non_empty_env("QUERY_REWRITE_MODEL", default="openai:gpt-4.1-mini")
+            or "openai:gpt-4.1-mini"
+        ),
+        query_rewrite_temperature=_get_float_env(
+            "QUERY_REWRITE_TEMPERATURE",
+            0.0,
+            minimum=0.0,
+        ),
+        query_rewrite_prompt_version=_get_non_empty_env(
+            "QUERY_REWRITE_PROMPT_VERSION",
+            default="v1",
+        )
+        or "v1",
+        query_rewrite_timeout_seconds=_get_int_env(
+            "QUERY_REWRITE_TIMEOUT_SECONDS",
+            10,
+            minimum=1,
+        ),
+        query_rewrite_max_tokens=_get_int_env(
+            "QUERY_REWRITE_MAX_TOKENS",
+            128,
+            minimum=1,
+        ),
     )

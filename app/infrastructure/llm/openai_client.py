@@ -55,6 +55,8 @@ class OpenAIClient(LLMClient):
         *,
         model: str,
         temperature: float | None = None,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
         api_key = self._get_api_key()
         payload = {
@@ -65,6 +67,8 @@ class OpenAIClient(LLMClient):
         }
         if temperature is not None:
             payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         started_at = perf_counter()
         response_payload = await self._request_completion(
@@ -73,6 +77,7 @@ class OpenAIClient(LLMClient):
                 "Content-Type": "application/json",
             },
             payload=payload,
+            timeout_seconds=timeout_seconds,
         )
         latency_ms = int((perf_counter() - started_at) * 1000)
         assistant_response = self._extract_response_text(response_payload)
@@ -107,11 +112,12 @@ class OpenAIClient(LLMClient):
         *,
         headers: dict[str, str],
         payload: dict[str, Any],
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
-                timeout=OPENAI_TIMEOUT_SECONDS,
+                timeout=timeout_seconds if timeout_seconds is not None else OPENAI_TIMEOUT_SECONDS,
                 transport=self._transport,
             ) as client:
                 response = await client.post("/chat/completions", headers=headers, json=payload)
