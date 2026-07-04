@@ -1,0 +1,13 @@
+{
+  "run_name": "retrieval-vector-reranked-llm-k5-from20",
+  "dataset": "../../evals/datasets/portfolio_eval_dataset.jsonl",
+  "output_dir": "../../evals/results/retrieval",
+  "retriever_type": "vector",
+  "retriever_top_k": 20,
+  "final_top_k": 5,
+  "query_rewriting_enabled": false,
+  "reranker_enabled": true,
+  "reranker_type": "llm",
+  "reranker_model": "openai:gpt-4.1-mini",
+  "reranker_initial_top_k": 20
+}

@@ -13,6 +13,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
+SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,11 @@ class Settings:
     query_rewrite_prompt_version: str = "v1"
     query_rewrite_timeout_seconds: int = 10
     query_rewrite_max_tokens: int = 128
+    enable_reranking: bool = False
+    reranker_type: str = "none"
+    reranker_model: str = "openai:gpt-4.1-mini"
+    reranker_initial_top_k: int = 20
+    reranker_final_top_k: int = 5
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -115,6 +121,19 @@ def _get_retriever_type_env(name: str, default: str) -> str:
     value = raw_value.strip().casefold()
     if value not in SUPPORTED_RETRIEVER_TYPES:
         supported_values = ", ".join(sorted(SUPPORTED_RETRIEVER_TYPES))
+        raise ValueError(f"{name} must be one of: {supported_values}.")
+
+    return value
+
+
+def _get_reranker_type_env(name: str, default: str) -> str:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    value = raw_value.strip().casefold()
+    if value not in SUPPORTED_RERANKER_TYPES:
+        supported_values = ", ".join(sorted(SUPPORTED_RERANKER_TYPES))
         raise ValueError(f"{name} must be one of: {supported_values}.")
 
     return value
@@ -229,6 +248,25 @@ def get_settings() -> Settings:
         query_rewrite_max_tokens=_get_int_env(
             "QUERY_REWRITE_MAX_TOKENS",
             128,
+            minimum=1,
+        ),
+        enable_reranking=_parse_bool(
+            os.getenv("ENABLE_RERANKING"),
+            default=False,
+        ),
+        reranker_type=_get_reranker_type_env("RERANKER_TYPE", "none"),
+        reranker_model=(
+            _get_non_empty_env("RERANKER_MODEL", default="openai:gpt-4.1-mini")
+            or "openai:gpt-4.1-mini"
+        ),
+        reranker_initial_top_k=_get_int_env(
+            "RERANKER_INITIAL_TOP_K",
+            20,
+            minimum=1,
+        ),
+        reranker_final_top_k=_get_int_env(
+            "RERANKER_FINAL_TOP_K",
+            5,
             minimum=1,
         ),
     )

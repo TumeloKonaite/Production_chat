@@ -14,6 +14,18 @@ class RetrievedChunk:
     metadata: dict[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalResult:
+    query: str
+    initial_chunks: list[RetrievedChunk]
+    final_chunks: list[RetrievedChunk]
+    reranker_enabled: bool
+    reranker_type: str
+    reranker_model: str | None
+    initial_top_k: int
+    final_top_k: int
+
+
 class Retriever(Protocol):
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         ...

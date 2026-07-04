@@ -223,6 +223,21 @@ Operational note:
 Use `evals/run_retrieval_sweep.py` to compare multiple retrieval configurations
 against the same dataset without rerunning the single-run CLI manually.
 
+The single-run retrieval eval also supports JSON config files for baseline vs
+reranked comparisons:
+
+```text
+configs/evals/retrieval_baseline.json
+configs/evals/retrieval_reranked_llm.json
+```
+
+Example commands:
+
+```text
+uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_baseline.json
+uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_reranked_llm.json
+```
+
 Example config:
 
 ```text
@@ -240,5 +255,9 @@ Operational notes:
 - Each experiment in the YAML config becomes a separate MLflow run.
 - The sweep reuses the shared retrieval eval runner and does not duplicate the
   retrieval metric calculation logic.
+- Single-run retrieval evals can also enable reranking directly with
+  `--enable-reranker --reranker-type llm --reranker-initial-top-k <N>`.
+- Reranked runs log both the initial retrieval candidate order and the final
+  reranked order so MRR and context-order changes are inspectable per query.
 - The runner writes per-experiment artifacts plus sweep-level comparison JSON
   and CSV outputs under `evals/results/retrieval_sweeps/`.

@@ -13,11 +13,18 @@ from app.repositories import KnowledgeRepository
 from app.repositories.db.session import get_session_factory
 from app.repositories.models import KnowledgeChunk
 from app.services.retrieval.errors import (
+    UnsupportedRerankerError,
     UnsupportedRetrieverError,
     VectorIndexConfigurationError,
 )
+from app.services.retrieval.reranker import (
+    LLMReranker,
+    NoOpReranker,
+    RERANKER_TYPE_LLM,
+    RERANKER_TYPE_NONE,
+)
 from app.services.retrieval.strategies import HybridRetriever, KeywordRetriever, VectorRetriever
-from app.services.retrieval.types import RetrievedChunk, Retriever
+from app.services.retrieval.types import RetrievalResult, RetrievedChunk, Retriever
 
 VECTOR_TYPE_PATTERN = re.compile(r"vector\((\d+)\)")
 
@@ -28,11 +35,23 @@ class RetrievalService:
         settings: Settings,
         vectorstore: Any | None = None,
         knowledge_repository: KnowledgeRepository | None = None,
+        reranker: Any | None = None,
     ) -> None:
         self._settings = settings
         self._default_top_k = settings.retrieval_top_k
         self._min_similarity = settings.retrieval_min_similarity
         self._retriever_type = settings.retriever_type
+        self._reranker_enabled = bool(getattr(settings, "enable_reranking", False))
+        self._configured_reranker_type = str(
+            getattr(settings, "reranker_type", RERANKER_TYPE_NONE)
+        ).casefold()
+        self._reranker_initial_top_k = int(
+            getattr(settings, "reranker_initial_top_k", self._default_top_k)
+        )
+        self._default_final_top_k = int(
+            getattr(settings, "reranker_final_top_k", self._default_top_k)
+        )
+        self._reranker_model = getattr(settings, "reranker_model", None)
         self._embedding_descriptor = EmbeddingDescriptor(
             provider=settings.embedding_provider,
             model=settings.knowledge_embedding_model,
@@ -41,6 +60,7 @@ class RetrievalService:
         self._vectorstore = vectorstore
         self._chunk_loader = self._build_chunk_loader(knowledge_repository)
         self._retriever = self._build_retriever()
+        self._reranker = reranker or self._build_reranker()
 
     @property
     def retriever_type(self) -> str:
@@ -94,7 +114,41 @@ class RetrievalService:
         self.vectorstore.add_documents(documents=documents, ids=[chunk.id for chunk in chunks])
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        return self._retriever.retrieve(query, top_k=top_k)
+        return self.retrieve_with_diagnostics(query, top_k=top_k).final_chunks
+
+    def retrieve_with_diagnostics(self, query: str, top_k: int | None = None) -> RetrievalResult:
+        final_top_k = top_k if top_k is not None else self._default_final_top_k
+        initial_top_k = self._resolve_initial_top_k(final_top_k)
+        initial_chunks = self._with_retrieval_ranks(
+            self._retriever.retrieve(query, top_k=initial_top_k)
+        )
+        final_chunks = self._with_final_ranks(
+            self._reranker.rerank(
+                question=query,
+                chunks=initial_chunks,
+                final_top_k=final_top_k,
+            )
+        )
+        return RetrievalResult(
+            query=query,
+            initial_chunks=initial_chunks,
+            final_chunks=final_chunks,
+            reranker_enabled=self.reranker_enabled,
+            reranker_type=self.reranker_type,
+            reranker_model=self._resolved_reranker_model(),
+            initial_top_k=initial_top_k,
+            final_top_k=final_top_k,
+        )
+
+    @property
+    def reranker_enabled(self) -> bool:
+        return self._reranker_enabled and self._configured_reranker_type != RERANKER_TYPE_NONE
+
+    @property
+    def reranker_type(self) -> str:
+        if not self.reranker_enabled:
+            return RERANKER_TYPE_NONE
+        return self._configured_reranker_type
 
     def _build_retriever(self) -> Retriever:
         vector_retriever = VectorRetriever(
@@ -119,6 +173,15 @@ class RetrievalService:
 
         raise UnsupportedRetrieverError(
             f"Unsupported retriever type: {self._retriever_type}."
+        )
+
+    def _build_reranker(self) -> Any:
+        if not self._reranker_enabled or self._configured_reranker_type == RERANKER_TYPE_NONE:
+            return NoOpReranker()
+        if self._configured_reranker_type == RERANKER_TYPE_LLM:
+            return LLMReranker(settings=self._settings)
+        raise UnsupportedRerankerError(
+            f"Unsupported reranker type: {self._configured_reranker_type}."
         )
 
     def _build_chunk_loader(
@@ -163,6 +226,52 @@ class RetrievalService:
             )
 
         return retrieved_chunks
+
+    def _resolve_initial_top_k(self, final_top_k: int) -> int:
+        if not self.reranker_enabled:
+            return final_top_k
+        return max(final_top_k, self._reranker_initial_top_k)
+
+    def _resolved_reranker_model(self) -> str | None:
+        if not self.reranker_enabled:
+            return None
+        if self.reranker_type == RERANKER_TYPE_LLM and isinstance(self._reranker_model, str):
+            return self._reranker_model
+        return None
+
+    def _with_retrieval_ranks(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        ranked_chunks: list[RetrievedChunk] = []
+        for rank, chunk in enumerate(chunks, start=1):
+            metadata = dict(chunk.metadata)
+            metadata["retrieval_rank"] = rank
+            ranked_chunks.append(
+                RetrievedChunk(
+                    id=chunk.id,
+                    source=chunk.source,
+                    section=chunk.section,
+                    content=chunk.content,
+                    similarity=chunk.similarity,
+                    metadata=metadata,
+                )
+            )
+        return ranked_chunks
+
+    def _with_final_ranks(self, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        ranked_chunks: list[RetrievedChunk] = []
+        for rank, chunk in enumerate(chunks, start=1):
+            metadata = dict(chunk.metadata)
+            metadata["final_rank"] = rank
+            ranked_chunks.append(
+                RetrievedChunk(
+                    id=chunk.id,
+                    source=chunk.source,
+                    section=chunk.section,
+                    content=chunk.content,
+                    similarity=chunk.similarity,
+                    metadata=metadata,
+                )
+            )
+        return ranked_chunks
 
     def _ensure_index_compatible(self) -> None:
         self._ensure_vector_dimension_is_supported()

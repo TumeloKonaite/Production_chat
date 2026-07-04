@@ -95,7 +95,39 @@ class FakeKnowledgeRepository:
         return list(self._chunks)
 
 
-def build_settings(*, retriever_type: str = "vector") -> object:
+class FakeReranker:
+    def __init__(self, ordered_ids: list[str] | None = None) -> None:
+        self.ordered_ids = ordered_ids
+        self.calls: list[dict[str, object]] = []
+
+    def rerank(
+        self,
+        *,
+        question: str,
+        chunks: list[object],
+        final_top_k: int,
+    ) -> list[object]:
+        self.calls.append(
+            {
+                "question": question,
+                "chunk_ids": [chunk.id for chunk in chunks],
+                "final_top_k": final_top_k,
+            }
+        )
+        if self.ordered_ids is None:
+            return list(chunks)[:final_top_k]
+        chunk_by_id = {chunk.id: chunk for chunk in chunks}
+        return [chunk_by_id[chunk_id] for chunk_id in self.ordered_ids[:final_top_k]]
+
+
+def build_settings(
+    *,
+    retriever_type: str = "vector",
+    enable_reranking: bool = False,
+    reranker_type: str = "none",
+    reranker_initial_top_k: int = 20,
+    reranker_final_top_k: int = 5,
+) -> object:
     return type(
         "Settings",
         (),
@@ -110,6 +142,11 @@ def build_settings(*, retriever_type: str = "vector") -> object:
             "database_url": "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/test",
             "openrouter_api_key": None,
             "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "enable_reranking": enable_reranking,
+            "reranker_type": reranker_type,
+            "reranker_initial_top_k": reranker_initial_top_k,
+            "reranker_final_top_k": reranker_final_top_k,
+            "reranker_model": "openai:gpt-4.1-mini",
         },
     )()
 
@@ -327,3 +364,50 @@ def test_retrieval_service_rejects_unsupported_retriever_type() -> None:
         raise AssertionError("Expected UnsupportedRetrieverError")
 
     assert message == "Unsupported retriever type: semantic."
+
+
+def test_retrieval_service_reranks_retrieved_candidates_before_returning_final_top_k() -> None:
+    vectorstore = FakeVectorStore()
+    vectorstore.results = [
+        (
+            Document(
+                page_content="Chunk one",
+                metadata={"chunk_id": "chunk-1", "source": "projects.md", "section": "One"},
+            ),
+            0.91,
+        ),
+        (
+            Document(
+                page_content="Chunk two",
+                metadata={"chunk_id": "chunk-2", "source": "skills.md", "section": "Two"},
+            ),
+            0.89,
+        ),
+        (
+            Document(
+                page_content="Chunk three",
+                metadata={"chunk_id": "chunk-3", "source": "profile.md", "section": "Three"},
+            ),
+            0.88,
+        ),
+    ]
+    reranker = FakeReranker(ordered_ids=["chunk-3", "chunk-1", "chunk-2"])
+    retrieval_service = RetrievalService(
+        settings=build_settings(
+            enable_reranking=True,
+            reranker_type="llm",
+            reranker_initial_top_k=3,
+            reranker_final_top_k=1,
+        ),
+        vectorstore=vectorstore,
+        reranker=reranker,
+    )
+
+    results = retrieval_service.retrieve("Tell me about Tumelo", top_k=1)
+
+    assert reranker.calls == [
+        {"question": "Tell me about Tumelo", "chunk_ids": ["chunk-1", "chunk-2", "chunk-3"], "final_top_k": 1}
+    ]
+    assert [chunk.id for chunk in results] == ["chunk-3"]
+    assert results[0].metadata["retrieval_rank"] == 3
+    assert results[0].metadata["final_rank"] == 1

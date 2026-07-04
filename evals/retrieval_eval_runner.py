@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +16,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings
+from app.infrastructure.llm import JudgeClient
+from app.services.chat.prompting import format_retrieved_context
 from app.services.retrieval import RetrievalService
 from evals.query_rewriter import (
     QUERY_REWRITE_STATUS_DISABLED,
@@ -163,12 +166,14 @@ def evaluate_examples(
     *,
     k: int,
     query_rewriter: QueryRewriter | None = None,
+    context_relevance_judge: JudgeClient | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     summary, per_query_results = evaluate_examples_for_k_values(
         examples,
         retrieval_service,
         k_values=[k],
         query_rewriter=query_rewriter,
+        context_relevance_judge=context_relevance_judge,
     )
     return {
         "num_queries_total": summary["num_queries_total"],
@@ -191,6 +196,7 @@ def evaluate_examples(
         ],
         "query_rewrite_total_tokens": summary["query_rewrite_total_tokens"],
         "query_rewrite_estimated_total_cost": summary["query_rewrite_estimated_total_cost"],
+        "context_relevance": summary["context_relevance"],
     }, per_query_results
 
 
@@ -200,6 +206,7 @@ def evaluate_examples_for_k_values(
     *,
     k_values: list[int],
     query_rewriter: QueryRewriter | None = None,
+    context_relevance_judge: JudgeClient | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     normalized_k_values = _normalize_k_values(k_values)
     max_k = max(normalized_k_values)
@@ -217,6 +224,7 @@ def evaluate_examples_for_k_values(
     rewrite_total_completion_tokens = 0
     rewrite_total_tokens = 0
     rewrite_estimated_total_cost = 0.0
+    context_relevance_scores: list[float] = []
 
     for example in examples:
         rewrite_result = (
@@ -227,14 +235,25 @@ def evaluate_examples_for_k_values(
                 rewrite_context=example.rewrite_context,
             )
         )
-        retrieved_chunks = retrieval_service.retrieve(
-            rewrite_result.query_used_for_retrieval,
+        retrieval_result = _retrieve_with_diagnostics(
+            retrieval_service=retrieval_service,
+            query=rewrite_result.query_used_for_retrieval,
             top_k=max_k,
         )
+        retrieved_chunks = retrieval_result.final_chunks
         retrieved_sources = unique_ranked_sources([chunk.source for chunk in retrieved_chunks])
         retrieved_chunk_ids = [chunk.id for chunk in retrieved_chunks]
+        before_rerank = _serialize_chunks(retrieval_result.initial_chunks)
+        after_rerank = _serialize_chunks(retrieval_result.final_chunks)
         has_expected_sources = bool(example.expected_source_documents)
         metrics_by_k: dict[str, dict[str, float]] = {}
+        context_relevance_score = _evaluate_context_relevance(
+            judge=context_relevance_judge,
+            question=rewrite_result.query_used_for_retrieval,
+            retrieved_chunks=retrieved_chunks,
+        )
+        if context_relevance_score is not None:
+            context_relevance_scores.append(context_relevance_score)
         if rewrite_result.query_rewriting_enabled:
             rewrite_attempt_count += 1
             rewrite_total_latency_ms += rewrite_result.query_rewrite_latency_ms or 0
@@ -310,8 +329,16 @@ def evaluate_examples_for_k_values(
                 "query_rewrite_estimated_cost": rewrite_result.query_rewrite_estimated_cost,
                 "query_rewrite_error": rewrite_result.query_rewrite_error,
                 "expected_source_documents": list(example.expected_source_documents),
+                "reranker_enabled": retrieval_result.reranker_enabled,
+                "reranker_type": retrieval_result.reranker_type,
+                "reranker_model": retrieval_result.reranker_model,
+                "retriever_top_k": retrieval_result.initial_top_k,
+                "final_top_k": retrieval_result.final_top_k,
+                "before_rerank": before_rerank,
+                "after_rerank": after_rerank,
                 "retrieved_sources": retrieved_sources,
                 "retrieved_chunk_ids": retrieved_chunk_ids,
+                "context_relevance": context_relevance_score,
                 "has_expected_sources": has_expected_sources,
                 "evaluation_group": evaluation_group,
                 "evaluated_k_values": normalized_k_values,
@@ -350,6 +377,7 @@ def evaluate_examples_for_k_values(
         "query_rewrite_total_completion_tokens": rewrite_total_completion_tokens,
         "query_rewrite_total_tokens": rewrite_total_tokens,
         "query_rewrite_estimated_total_cost": round(rewrite_estimated_total_cost, 6),
+        "context_relevance": _mean_or_none(context_relevance_scores),
         "metrics_by_k": {
             str(current_k): {
                 "hit_at_k": _mean_or_none(aggregate_hits[current_k]),
@@ -382,6 +410,19 @@ def build_run_config(
     if resolved_chunk_overlap is None:
         resolved_chunk_overlap = getattr(settings, "knowledge_chunk_overlap", None)
 
+    reranker_enabled = bool(getattr(settings, "enable_reranking", False))
+    reranker_type = (
+        str(getattr(settings, "reranker_type", "none")).casefold()
+        if reranker_enabled
+        else "none"
+    )
+    reranker_model = getattr(settings, "reranker_model", None) if reranker_enabled else None
+    reranker_initial_top_k = (
+        max(top_k, int(getattr(settings, "reranker_initial_top_k", top_k)))
+        if reranker_enabled
+        else top_k
+    )
+
     return {
         "timestamp": timestamp,
         "run_name": run_name,
@@ -400,6 +441,11 @@ def build_run_config(
         "query_rewrite_prompt_version": settings.query_rewrite_prompt_version,
         "query_rewrite_timeout_seconds": settings.query_rewrite_timeout_seconds,
         "query_rewrite_max_tokens": settings.query_rewrite_max_tokens,
+        "reranker_enabled": reranker_enabled,
+        "reranker_type": reranker_type,
+        "reranker_model": reranker_model,
+        "reranker_initial_top_k": reranker_initial_top_k,
+        "reranker_final_top_k": top_k,
         "chunk_size": resolved_chunk_size,
         "chunk_overlap": resolved_chunk_overlap,
         "settings_used_by_retriever": {
@@ -407,6 +453,10 @@ def build_run_config(
             "default_retrieval_config": settings.default_retrieval_config,
             "retrieval_top_k": settings.retrieval_top_k,
             "retrieval_min_similarity": settings.retrieval_min_similarity,
+            "enable_reranking": reranker_enabled,
+            "reranker_type": reranker_type,
+            "reranker_initial_top_k": reranker_initial_top_k,
+            "reranker_final_top_k": top_k,
             "knowledge_collection_name": settings.knowledge_collection_name,
             "embedding_provider": settings.embedding_provider,
             "embedding_dimension": settings.embedding_dimension,
@@ -534,6 +584,11 @@ def log_run_to_tracker(
                 "query_rewrite_prompt_version": config.get("query_rewrite_prompt_version"),
                 "query_rewrite_timeout_seconds": config.get("query_rewrite_timeout_seconds"),
                 "query_rewrite_max_tokens": config.get("query_rewrite_max_tokens"),
+                "reranker_enabled": config.get("reranker_enabled"),
+                "reranker_type": config.get("reranker_type"),
+                "reranker_model": config.get("reranker_model"),
+                "reranker_initial_top_k": config.get("reranker_initial_top_k"),
+                "reranker_final_top_k": config.get("reranker_final_top_k"),
             }
         )
         tracker.log_metrics(
@@ -567,6 +622,11 @@ def log_run_to_tracker(
                 "query_rewrite_estimated_total_cost": summary.get(
                     "query_rewrite_estimated_total_cost",
                     0.0,
+                ),
+                "context_relevance": (
+                    summary["context_relevance"]
+                    if summary.get("context_relevance") is not None
+                    else 0.0
                 ),
             }
         )
@@ -624,11 +684,13 @@ def run_retrieval_eval(
 
     retrieval_service = RetrievalService(settings=settings)
     query_rewriter = QueryRewriter(settings=settings) if settings.enable_query_rewriting else None
+    context_relevance_judge = _build_context_relevance_judge(settings)
     summary, results = evaluate_examples(
         examples,
         retrieval_service,
         k=top_k,
         query_rewriter=query_rewriter,
+        context_relevance_judge=context_relevance_judge,
     )
     config = build_run_config(
         settings=settings,
@@ -697,6 +759,14 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
         "expected_source_documents",
         "retrieved_sources",
         "retrieved_chunk_ids",
+        "reranker_enabled",
+        "reranker_type",
+        "reranker_model",
+        "retriever_top_k",
+        "final_top_k",
+        "before_rerank",
+        "after_rerank",
+        "context_relevance",
         "has_expected_sources",
         "evaluation_group",
         "hit_at_k",
@@ -716,6 +786,8 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
             )
             row["retrieved_sources"] = json.dumps(result["retrieved_sources"], ensure_ascii=True)
             row["retrieved_chunk_ids"] = json.dumps(result["retrieved_chunk_ids"], ensure_ascii=True)
+            row["before_rerank"] = json.dumps(result.get("before_rerank", []), ensure_ascii=True)
+            row["after_rerank"] = json.dumps(result.get("after_rerank", []), ensure_ascii=True)
             writer.writerow(row)
 
 
@@ -769,3 +841,108 @@ def _normalize_optional_text(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _retrieve_with_diagnostics(
+    *,
+    retrieval_service: RetrievalService,
+    query: str,
+    top_k: int,
+):
+    retrieve_with_diagnostics = getattr(retrieval_service, "retrieve_with_diagnostics", None)
+    if callable(retrieve_with_diagnostics):
+        return retrieve_with_diagnostics(query, top_k=top_k)
+
+    final_chunks = retrieval_service.retrieve(query, top_k=top_k)
+    return type(
+        "RetrievalResultFallback",
+        (),
+        {
+            "query": query,
+            "initial_chunks": list(final_chunks),
+            "final_chunks": list(final_chunks),
+            "reranker_enabled": False,
+            "reranker_type": "none",
+            "reranker_model": None,
+            "initial_top_k": top_k,
+            "final_top_k": top_k,
+        },
+    )()
+
+
+def _serialize_chunks(chunks: list[Any]) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for chunk in chunks:
+        metadata = getattr(chunk, "metadata", {}) or {}
+        serialized.append(
+            {
+                "chunk_id": getattr(chunk, "id", None),
+                "source": getattr(chunk, "source", None),
+                "section": getattr(chunk, "section", None),
+                "similarity": getattr(chunk, "similarity", None),
+                "retrieval_rank": metadata.get("retrieval_rank"),
+                "reranker_rank": metadata.get("reranker_rank"),
+                "final_rank": metadata.get("final_rank"),
+            }
+        )
+    return serialized
+
+
+def _evaluate_context_relevance(
+    judge: JudgeClient | None,
+    question: str,
+    retrieved_chunks: list[Any],
+) -> float | None:
+    if judge is None:
+        return None
+
+    prompt = _build_context_relevance_prompt(
+        question=question,
+        retrieved_chunks=retrieved_chunks,
+    )
+    try:
+        evaluation, _usage, _latency_ms, _model = asyncio.run(judge.evaluate(prompt=prompt))
+    except Exception:
+        return None
+    return float(evaluation.context_relevance.score)
+
+
+def _build_context_relevance_judge(settings: Settings) -> JudgeClient | None:
+    required_attributes = (
+        "default_model_config_id",
+        "model_configs_json",
+        "openai_api_key",
+        "openai_base_url",
+        "openrouter_api_key",
+        "openrouter_base_url",
+    )
+    if not all(hasattr(settings, attribute) for attribute in required_attributes):
+        return None
+    try:
+        return JudgeClient(settings=settings)
+    except Exception:
+        return None
+
+
+def _build_context_relevance_prompt(*, question: str, retrieved_chunks: list[Any]) -> str:
+    return "\n\n".join(
+        [
+            "You are evaluating retrieval quality for a RAG system.",
+            "Score only whether the retrieved context is useful for answering the user question.",
+            "Return exactly one JSON object with this schema:",
+            (
+                '{'
+                '"context_relevance":{"score":0,"reason":"..."},'
+                '"faithfulness":{"score":2,"reason":"No answer was provided; ignore this field."},'
+                '"answer_relevance":{"score":0,"reason":"No answer was provided; ignore this field."}'
+                "}"
+            ),
+            "Scoring rules for context_relevance:",
+            "- 0: retrieved context is irrelevant or missing the needed information.",
+            "- 1: retrieved context is partially useful but incomplete or poorly ordered.",
+            "- 2: retrieved context contains the information needed to answer well.",
+            "Use short reasons. Do not return markdown.",
+            f"Question:\n{question}",
+            "Retrieved context:\n" + format_retrieved_context(retrieved_chunks),
+        ]
+    )

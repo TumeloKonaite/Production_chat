@@ -110,7 +110,7 @@ class JudgeClient:
         )
 
         try:
-            parsed = json.loads(response_text)
+            parsed = json.loads(_extract_json_object_text(response_text))
         except json.JSONDecodeError as exc:
             raise JudgeClientError() from exc
 
@@ -163,11 +163,41 @@ def _parse_metric(payload: dict[str, Any], key: str) -> JudgeMetricScore:
     if not isinstance(metric_payload, dict):
         raise JudgeClientError()
 
-    score = metric_payload.get("score")
+    score = _normalize_score(metric_payload.get("score"))
     reason = metric_payload.get("reason")
-    if not isinstance(score, int) or not isinstance(reason, str):
+    if score is None or not isinstance(reason, str):
         raise JudgeClientError()
     if score < 0 or score > 2:
         raise JudgeClientError()
 
     return JudgeMetricScore(score=score, reason=reason.strip())
+
+
+def _normalize_score(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_json_object_text(response_text: str) -> str:
+    stripped = response_text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped

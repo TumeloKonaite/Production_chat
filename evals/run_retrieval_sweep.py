@@ -44,6 +44,10 @@ class RetrievalSweepExperiment:
     embedding_dimension: int | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    reranker_enabled: bool = False
+    reranker_type: str = "none"
+    reranker_model: str | None = None
+    reranker_initial_top_k: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +149,32 @@ def load_retrieval_sweep_config(path: Path) -> RetrievalSweepConfig:
             raw_experiment.get("chunk_overlap"),
             field_name=f"experiments[{index}].chunk_overlap",
         )
+        reranker_enabled = _optional_bool(
+            raw_experiment.get("reranker_enabled"),
+            field_name=f"experiments[{index}].reranker_enabled",
+            default=False,
+        )
+        reranker_type = _optional_string(
+            raw_experiment.get("reranker_type"),
+            field_name=f"experiments[{index}].reranker_type",
+            normalize_case=True,
+        ) or ("llm" if reranker_enabled else "none")
+        if reranker_type not in {"none", "llm"}:
+            raise ValueError(
+                f"experiments[{index}].reranker_type must be one of: llm, none."
+            )
+        reranker_model = _optional_string(
+            raw_experiment.get("reranker_model"),
+            field_name=f"experiments[{index}].reranker_model",
+        )
+        reranker_initial_top_k = _optional_positive_int(
+            raw_experiment.get("reranker_initial_top_k"),
+            field_name=f"experiments[{index}].reranker_initial_top_k",
+        )
+        if reranker_enabled and reranker_type == "none":
+            raise ValueError(
+                f"experiments[{index}].reranker_type must not be none when reranker_enabled is true."
+            )
         if chunk_size is not None and chunk_overlap is not None and chunk_overlap >= chunk_size:
             raise ValueError(
                 f"experiments[{index}].chunk_overlap must be smaller than chunk_size."
@@ -160,6 +190,10 @@ def load_retrieval_sweep_config(path: Path) -> RetrievalSweepConfig:
                 embedding_dimension=embedding_dimension,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
+                reranker_enabled=reranker_enabled,
+                reranker_type=reranker_type,
+                reranker_model=reranker_model,
+                reranker_initial_top_k=reranker_initial_top_k,
             )
         )
 
@@ -258,6 +292,11 @@ def build_experiment_settings(
         embedding_dimension=experiment.embedding_dimension or settings.embedding_dimension,
         knowledge_chunk_size=chunk_size,
         knowledge_chunk_overlap=chunk_overlap,
+        enable_reranking=experiment.reranker_enabled,
+        reranker_type=experiment.reranker_type,
+        reranker_model=experiment.reranker_model or settings.reranker_model,
+        reranker_initial_top_k=experiment.reranker_initial_top_k or settings.reranker_initial_top_k,
+        reranker_final_top_k=experiment.top_k,
     )
 
 
@@ -286,12 +325,18 @@ def build_sweep_result_row(
         "query_rewriting_enabled": run_result.config.get("query_rewriting_enabled"),
         "query_rewrite_model": run_result.config.get("query_rewrite_model"),
         "query_rewrite_prompt_version": run_result.config.get("query_rewrite_prompt_version"),
+        "reranker_enabled": run_result.config.get("reranker_enabled"),
+        "reranker_type": run_result.config.get("reranker_type"),
+        "reranker_model": run_result.config.get("reranker_model"),
+        "reranker_initial_top_k": run_result.config.get("reranker_initial_top_k"),
+        "reranker_final_top_k": run_result.config.get("reranker_final_top_k"),
         "dataset_path": run_result.config.get("dataset_path"),
         "git_commit_sha": run_result.config.get("git_commit_sha"),
         "mrr": summary.get("mrr"),
         "recall_at_k": summary.get("recall_at_k"),
         "mean_precision_at_k": summary.get("mean_precision_at_k"),
         "hit_at_k": summary.get("hit_at_k"),
+        "context_relevance": summary.get("context_relevance"),
         "num_queries_total": summary.get("num_queries_total"),
         "num_queries_evaluated": summary.get("num_queries_evaluated"),
         "num_queries_without_expected_source": summary.get("num_queries_without_expected_source"),
@@ -333,6 +378,11 @@ def write_retrieval_sweep_manifest(
                 "embedding_dimension": experiment.embedding_dimension,
                 "chunk_size": experiment.chunk_size,
                 "chunk_overlap": experiment.chunk_overlap,
+                "reranker_enabled": experiment.reranker_enabled,
+                "reranker_type": experiment.reranker_type,
+                "reranker_model": experiment.reranker_model,
+                "reranker_initial_top_k": experiment.reranker_initial_top_k,
+                "reranker_final_top_k": experiment.top_k,
             }
             for experiment in sweep_config.experiments
         ],
@@ -341,6 +391,11 @@ def write_retrieval_sweep_manifest(
         "query_rewrite_prompt_version": (
             settings.query_rewrite_prompt_version if settings.enable_query_rewriting else None
         ),
+        "reranker_enabled": settings.enable_reranking,
+        "reranker_type": settings.reranker_type,
+        "reranker_model": settings.reranker_model if settings.enable_reranking else None,
+        "reranker_initial_top_k": settings.reranker_initial_top_k if settings.enable_reranking else None,
+        "reranker_final_top_k": settings.reranker_final_top_k if settings.enable_reranking else None,
         "python_command_used": str(sys.executable) + " " + " ".join(argv),
     }
     manifest_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
@@ -377,12 +432,18 @@ def write_retrieval_sweep_comparison_artifacts(
         "query_rewriting_enabled",
         "query_rewrite_model",
         "query_rewrite_prompt_version",
+        "reranker_enabled",
+        "reranker_type",
+        "reranker_model",
+        "reranker_initial_top_k",
+        "reranker_final_top_k",
         "dataset_path",
         "git_commit_sha",
         "mrr",
         "recall_at_k",
         "mean_precision_at_k",
         "hit_at_k",
+        "context_relevance",
         "num_queries_total",
         "num_queries_evaluated",
         "num_queries_without_expected_source",
@@ -419,6 +480,7 @@ def format_retrieval_sweep_summary(rows: list[dict[str, Any]]) -> str:
         "mrr",
         "recall_at_k",
         "mean_precision_at_k",
+        "context_relevance",
     ]
     rendered_rows = [
         [
@@ -428,6 +490,7 @@ def format_retrieval_sweep_summary(rows: list[dict[str, Any]]) -> str:
             _format_metric(row.get("mrr")),
             _format_metric(row.get("recall_at_k")),
             _format_metric(row.get("mean_precision_at_k")),
+            _format_metric(row.get("context_relevance")),
         ]
         for row in rows
     ]
@@ -513,6 +576,14 @@ def _optional_non_negative_int(value: object, *, field_name: str) -> int | None:
         return None
     if not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer when provided.")
+    return value
+
+
+def _optional_bool(value: object, *, field_name: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean when provided.")
     return value
 
 
