@@ -9,6 +9,7 @@ import httpx
 from app.config import Settings
 from app.domain.evals import JudgeEvaluation, JudgeMetricScore
 from app.infrastructure.llm.base import TokenUsage
+from app.infrastructure.llm.model_config import build_default_model_config
 from app.infrastructure.llm.model_registry import ModelRegistry
 from app.infrastructure.llm.openai_client import OpenAIClient
 from app.services.llm.errors import LLMConfigurationError, LLMServiceError
@@ -32,6 +33,7 @@ class JudgeClient:
         self._model_registry = ModelRegistry(
             default_model_config_id=settings.default_model_config_id,
             model_configs_json=settings.model_configs_json,
+            default_model_config=build_default_model_config(settings),
         )
         self._clients = {
             "openai": OpenAIClient.from_settings(

@@ -18,13 +18,19 @@ class OpenAIClient(LLMClient):
     def __init__(
         self,
         *,
+        provider: str,
         api_key: str | None,
         base_url: str,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        self._provider = provider
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._transport = transport
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
 
     @classmethod
     def from_settings(
@@ -36,14 +42,30 @@ class OpenAIClient(LLMClient):
     ) -> OpenAIClient:
         if provider == "openai":
             return cls(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
+                provider=provider,
+                api_key=(
+                    settings.openai_api_key
+                    or (settings.llm_api_key if settings.llm_provider == "openai" else None)
+                ),
+                base_url=(
+                    settings.llm_base_url
+                    if settings.llm_provider == "openai"
+                    else settings.openai_base_url
+                ),
                 transport=transport,
             )
         if provider == "openrouter":
             return cls(
-                api_key=settings.openrouter_api_key,
-                base_url=settings.openrouter_base_url,
+                provider=provider,
+                api_key=(
+                    settings.openrouter_api_key
+                    or (settings.llm_api_key if settings.llm_provider == "openrouter" else None)
+                ),
+                base_url=(
+                    settings.llm_base_url
+                    if settings.llm_provider == "openrouter"
+                    else settings.openrouter_base_url
+                ),
                 transport=transport,
             )
 
@@ -122,12 +144,22 @@ class OpenAIClient(LLMClient):
             ) as client:
                 response = await client.post("/chat/completions", headers=headers, json=payload)
                 if response.status_code >= 400:
-                    raise LLMServiceError()
+                    raise LLMServiceError(
+                        self._format_error_message(
+                            status_code=response.status_code,
+                            response_text=response.text,
+                        )
+                    )
                 return response.json()
         except httpx.HTTPError as exc:
-            raise LLMServiceError() from exc
+            raise LLMServiceError(
+                f"{self._provider} request to {self._base_url}/chat/completions failed: "
+                f"{type(exc).__name__}."
+            ) from exc
         except ValueError as exc:
-            raise LLMServiceError() from exc
+            raise LLMServiceError(
+                f"{self._provider} returned invalid JSON from {self._base_url}/chat/completions."
+            ) from exc
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         content = self._get_message_content(payload)
@@ -159,3 +191,12 @@ class OpenAIClient(LLMClient):
             return None
 
         return message.get("content")
+
+    def _format_error_message(self, *, status_code: int, response_text: str) -> str:
+        sanitized_excerpt = " ".join(response_text.split())
+        if len(sanitized_excerpt) > 300:
+            sanitized_excerpt = sanitized_excerpt[:297] + "..."
+        return (
+            f"{self._provider} request to {self._base_url}/chat/completions returned "
+            f"HTTP {status_code}. Response excerpt: {sanitized_excerpt}"
+        )

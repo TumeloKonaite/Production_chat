@@ -12,6 +12,7 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
+SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 
@@ -50,6 +51,12 @@ class Settings:
     dagshub_repo_owner: str | None
     dagshub_repo_name: str | None
     dagshub_token: str | None
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4.1-mini"
+    llm_base_url: str = DEFAULT_OPENAI_BASE_URL
+    llm_api_key: str | None = None
+    llm_prompt_cost_per_1m_tokens: float | None = None
+    llm_completion_cost_per_1m_tokens: float | None = None
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     enable_query_rewriting: bool = False
@@ -113,6 +120,23 @@ def _get_float_env(name: str, default: float, *, minimum: float | None = None) -
     return value
 
 
+def _get_optional_float_env(name: str, *, minimum: float | None = None) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return None
+
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number.") from exc
+
+    if minimum is not None and value < minimum:
+        comparator = "greater than or equal to 0" if minimum == 0 else f"greater than or equal to {minimum}"
+        raise ValueError(f"{name} must be {comparator}.")
+
+    return value
+
+
 def _get_retriever_type_env(name: str, default: str) -> str:
     raw_value = os.getenv(name)
     if raw_value is None or not raw_value.strip():
@@ -139,15 +163,102 @@ def _get_reranker_type_env(name: str, default: str) -> str:
     return value
 
 
+def _extract_provider(model_config_id: str | None) -> str | None:
+    if model_config_id is None or ":" not in model_config_id:
+        return None
+    provider, _model = model_config_id.split(":", 1)
+    return provider.strip().casefold() or None
+
+
+def _extract_model_name(model_config_id: str | None) -> str | None:
+    if model_config_id is None or ":" not in model_config_id:
+        return None
+    _provider, model = model_config_id.split(":", 1)
+    return model.strip() or None
+
+
+def _normalize_model_config_id(provider: str, model: str, configured_model_config_id: str | None) -> str:
+    if configured_model_config_id and ":" not in configured_model_config_id:
+        return f"openai:{configured_model_config_id}"
+    if configured_model_config_id is not None:
+        return configured_model_config_id
+    return f"{provider}:{model}"
+
+
+def _get_llm_provider(default_model_config_id: str | None) -> str:
+    provider = (
+        _get_non_empty_env("LLM_PROVIDER")
+        or _extract_provider(default_model_config_id)
+        or "openai"
+    ).casefold()
+    if provider not in SUPPORTED_LLM_PROVIDERS:
+        supported_values = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+        raise ValueError(f"LLM_PROVIDER must be one of: {supported_values}.")
+    return provider
+
+
 @lru_cache
 def get_settings() -> Settings:
     # Cache config so dependency injection reuses the same resolved settings object.
-    configured_model = os.getenv("DEFAULT_MODEL_CONFIG_ID")
-    if not configured_model:
-        openai_model = os.getenv("OPENAI_MODEL")
-        configured_model = (
-            f"openai:{openai_model}" if openai_model and ":" not in openai_model else openai_model
+    configured_model_config_id = _get_non_empty_env("DEFAULT_MODEL_CONFIG_ID")
+    configured_llm_provider = _get_non_empty_env("LLM_PROVIDER")
+    configured_llm_model = _get_non_empty_env("LLM_MODEL")
+    llm_provider = (
+        configured_llm_provider.casefold()
+        if configured_llm_provider is not None
+        else _get_llm_provider(configured_model_config_id)
+    )
+    if llm_provider not in SUPPORTED_LLM_PROVIDERS:
+        supported_values = ", ".join(sorted(SUPPORTED_LLM_PROVIDERS))
+        raise ValueError(f"LLM_PROVIDER must be one of: {supported_values}.")
+    llm_model = (
+        configured_llm_model
+        or _extract_model_name(configured_model_config_id)
+        or _get_non_empty_env("OPENAI_MODEL")
+        or "gpt-4.1-mini"
+    )
+    default_model_config_id = (
+        f"{llm_provider}:{llm_model}"
+        if configured_llm_provider is not None or configured_llm_model is not None
+        else _normalize_model_config_id(
+            llm_provider,
+            llm_model,
+            configured_model_config_id,
         )
+    )
+
+    llm_base_url_override = _get_non_empty_env("LLM_BASE_URL")
+    openai_base_url = (
+        llm_base_url_override
+        if llm_provider == "openai" and llm_base_url_override is not None
+        else (
+            _get_non_empty_env("OPENAI_BASE_URL", default=DEFAULT_OPENAI_BASE_URL)
+            or DEFAULT_OPENAI_BASE_URL
+        )
+    ).rstrip("/")
+    openrouter_base_url = (
+        llm_base_url_override
+        if llm_provider == "openrouter" and llm_base_url_override is not None
+        else (
+            _get_non_empty_env("OPENROUTER_BASE_URL", default=DEFAULT_OPENROUTER_BASE_URL)
+            or DEFAULT_OPENROUTER_BASE_URL
+        )
+    ).rstrip("/")
+
+    llm_api_key_override = _get_non_empty_env("LLM_API_KEY")
+    openai_api_key = (
+        llm_api_key_override
+        if llm_provider == "openai" and llm_api_key_override is not None
+        else _get_non_empty_env("OPENAI_API_KEY")
+    )
+    openrouter_api_key = (
+        llm_api_key_override
+        if llm_provider == "openrouter" and llm_api_key_override is not None
+        else _get_non_empty_env("OPENROUTER_API_KEY")
+    )
+
+    llm_base_url = openai_base_url if llm_provider == "openai" else openrouter_base_url
+    llm_api_key = openai_api_key if llm_provider == "openai" else openrouter_api_key
 
     knowledge_chunk_size = _get_int_env(
         "CHUNK_SIZE",
@@ -167,16 +278,10 @@ def get_settings() -> Settings:
             "DATABASE_URL",
             "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot",
         ),
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        openai_base_url=(
-            _get_non_empty_env("OPENAI_BASE_URL", "LLM_BASE_URL", default=DEFAULT_OPENAI_BASE_URL)
-            or DEFAULT_OPENAI_BASE_URL
-        ).rstrip("/"),
-        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
-        openrouter_base_url=(
-            _get_non_empty_env("OPENROUTER_BASE_URL", default=DEFAULT_OPENROUTER_BASE_URL)
-            or DEFAULT_OPENROUTER_BASE_URL
-        ).rstrip("/"),
+        openai_api_key=openai_api_key,
+        openai_base_url=openai_base_url,
+        openrouter_api_key=openrouter_api_key,
+        openrouter_base_url=openrouter_base_url,
         tavus_api_key=os.getenv("TAVUS_API_KEY"),
         tavus_base_url=os.getenv("TAVUS_BASE_URL", "https://tavusapi.com"),
         tavus_face_id=os.getenv("TAVUS_FACE_ID"),
@@ -185,7 +290,7 @@ def get_settings() -> Settings:
         tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         eval_admin_token=_get_non_empty_env("EVAL_ADMIN_TOKEN"),
-        default_model_config_id=configured_model or "openai:gpt-4.1-mini",
+        default_model_config_id=default_model_config_id,
         model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
         embedding_provider=(
             _get_non_empty_env("EMBEDDING_PROVIDER", default="hf") or "hf"
@@ -222,6 +327,18 @@ def get_settings() -> Settings:
         dagshub_repo_owner=os.getenv("DAGSHUB_REPO_OWNER"),
         dagshub_repo_name=os.getenv("DAGSHUB_REPO_NAME"),
         dagshub_token=os.getenv("DAGSHUB_TOKEN"),
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_prompt_cost_per_1m_tokens=_get_optional_float_env(
+            "LLM_PROMPT_COST_PER_1M_TOKENS",
+            minimum=0.0,
+        ),
+        llm_completion_cost_per_1m_tokens=_get_optional_float_env(
+            "LLM_COMPLETION_COST_PER_1M_TOKENS",
+            minimum=0.0,
+        ),
         enable_query_rewriting=_parse_bool(
             os.getenv("ENABLE_QUERY_REWRITING"),
             default=False,
