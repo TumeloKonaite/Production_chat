@@ -56,6 +56,12 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.retriever_type == "vector"
     assert settings.retrieval_top_k == 5
     assert settings.eval_admin_token is None
+    assert settings.enable_query_rewriting is False
+    assert settings.query_rewrite_model == "openai:gpt-4.1-mini"
+    assert settings.query_rewrite_temperature == 0.0
+    assert settings.query_rewrite_prompt_version == "v1"
+    assert settings.query_rewrite_timeout_seconds == 10
+    assert settings.query_rewrite_max_tokens == 128
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,6 +76,26 @@ def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.Monkey
     assert settings.eval_admin_token == "eval-secret"
 
 
+def test_get_settings_uses_configured_query_rewrite_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_QUERY_REWRITING", "true")
+    monkeypatch.setenv("QUERY_REWRITE_MODEL", "openai:gpt-4.1")
+    monkeypatch.setenv("QUERY_REWRITE_TEMPERATURE", "0.2")
+    monkeypatch.setenv("QUERY_REWRITE_PROMPT_VERSION", "v2")
+    monkeypatch.setenv("QUERY_REWRITE_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("QUERY_REWRITE_MAX_TOKENS", "64")
+
+    settings = get_settings()
+
+    assert settings.enable_query_rewriting is True
+    assert settings.query_rewrite_model == "openai:gpt-4.1"
+    assert settings.query_rewrite_temperature == 0.2
+    assert settings.query_rewrite_prompt_version == "v2"
+    assert settings.query_rewrite_timeout_seconds == 7
+    assert settings.query_rewrite_max_tokens == 64
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value", "expected_message"),
     [
@@ -78,6 +104,8 @@ def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.Monkey
         ("CHUNK_SIZE", "abc", "CHUNK_SIZE must be an integer."),
         ("RETRIEVAL_TOP_K", "0", "RETRIEVAL_TOP_K must be greater than 0."),
         ("RETRIEVAL_TOP_K", "abc", "RETRIEVAL_TOP_K must be an integer."),
+        ("QUERY_REWRITE_TEMPERATURE", "-0.1", "QUERY_REWRITE_TEMPERATURE must be greater than or equal to 0."),
+        ("QUERY_REWRITE_MAX_TOKENS", "0", "QUERY_REWRITE_MAX_TOKENS must be greater than 0."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(

@@ -16,6 +16,16 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.config import Settings
 from app.services.retrieval import RetrievalService
+from evals.query_rewriter import (
+    QUERY_REWRITE_STATUS_DISABLED,
+    QUERY_REWRITE_STATUS_ERROR_FALLBACK,
+    QUERY_REWRITE_STATUS_INVALID_RESPONSE_FALLBACK,
+    QUERY_REWRITE_STATUS_SUCCESS,
+    QUERY_REWRITE_STATUS_TIMEOUT_FALLBACK,
+    QueryRewriter,
+    build_disabled_query_rewrite_result,
+    get_query_rewrite_prompt_template,
+)
 from evals.metrics.retrieval_metrics import (
     first_relevant_rank,
     hit_at_k,
@@ -36,6 +46,7 @@ class RetrievalEvalExample:
     id: str
     question: str
     expected_source_documents: list[str]
+    rewrite_context: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +94,7 @@ def load_dataset(path: Path) -> list[RetrievalEvalExample]:
                 expected_source_documents=[
                     str(item) for item in payload.get("expected_source_documents", [])
                 ],
+                rewrite_context=_normalize_optional_text(payload.get("rewrite_context")),
             )
         )
     return examples
@@ -150,11 +162,13 @@ def evaluate_examples(
     retrieval_service: RetrievalService,
     *,
     k: int,
+    query_rewriter: QueryRewriter | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     summary, per_query_results = evaluate_examples_for_k_values(
         examples,
         retrieval_service,
         k_values=[k],
+        query_rewriter=query_rewriter,
     )
     return {
         "num_queries_total": summary["num_queries_total"],
@@ -166,6 +180,17 @@ def evaluate_examples(
         "recall_at_k": summary["recall_at_k"],
         "mean_precision_at_k": summary["mean_precision_at_k"],
         "mrr": summary["mrr"],
+        "query_rewrite_total_latency_ms": summary["query_rewrite_total_latency_ms"],
+        "query_rewrite_avg_latency_ms": summary["query_rewrite_avg_latency_ms"],
+        "query_rewrite_success_count": summary["query_rewrite_success_count"],
+        "query_rewrite_fallback_count": summary["query_rewrite_fallback_count"],
+        "query_rewrite_failure_count": summary["query_rewrite_failure_count"],
+        "query_rewrite_total_prompt_tokens": summary["query_rewrite_total_prompt_tokens"],
+        "query_rewrite_total_completion_tokens": summary[
+            "query_rewrite_total_completion_tokens"
+        ],
+        "query_rewrite_total_tokens": summary["query_rewrite_total_tokens"],
+        "query_rewrite_estimated_total_cost": summary["query_rewrite_estimated_total_cost"],
     }, per_query_results
 
 
@@ -174,6 +199,7 @@ def evaluate_examples_for_k_values(
     retrieval_service: RetrievalService,
     *,
     k_values: list[int],
+    query_rewriter: QueryRewriter | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     normalized_k_values = _normalize_k_values(k_values)
     max_k = max(normalized_k_values)
@@ -182,13 +208,52 @@ def evaluate_examples_for_k_values(
     aggregate_recalls = {k: [] for k in normalized_k_values}
     aggregate_precisions = {k: [] for k in normalized_k_values}
     aggregate_mrrs: list[float] = []
+    rewrite_total_latency_ms = 0
+    rewrite_attempt_count = 0
+    rewrite_success_count = 0
+    rewrite_fallback_count = 0
+    rewrite_failure_count = 0
+    rewrite_total_prompt_tokens = 0
+    rewrite_total_completion_tokens = 0
+    rewrite_total_tokens = 0
+    rewrite_estimated_total_cost = 0.0
 
     for example in examples:
-        retrieved_chunks = retrieval_service.retrieve(example.question, top_k=max_k)
+        rewrite_result = (
+            query_rewriter.rewrite_query(example.question, context=example.rewrite_context)
+            if query_rewriter is not None
+            else build_disabled_query_rewrite_result(
+                original_query=example.question,
+                rewrite_context=example.rewrite_context,
+            )
+        )
+        retrieved_chunks = retrieval_service.retrieve(
+            rewrite_result.query_used_for_retrieval,
+            top_k=max_k,
+        )
         retrieved_sources = unique_ranked_sources([chunk.source for chunk in retrieved_chunks])
         retrieved_chunk_ids = [chunk.id for chunk in retrieved_chunks]
         has_expected_sources = bool(example.expected_source_documents)
         metrics_by_k: dict[str, dict[str, float]] = {}
+        if rewrite_result.query_rewriting_enabled:
+            rewrite_attempt_count += 1
+            rewrite_total_latency_ms += rewrite_result.query_rewrite_latency_ms or 0
+            rewrite_total_prompt_tokens += rewrite_result.query_rewrite_prompt_tokens or 0
+            rewrite_total_completion_tokens += (
+                rewrite_result.query_rewrite_completion_tokens or 0
+            )
+            rewrite_total_tokens += rewrite_result.query_rewrite_total_tokens or 0
+            rewrite_estimated_total_cost += rewrite_result.query_rewrite_estimated_cost or 0.0
+            if rewrite_result.query_rewrite_status == QUERY_REWRITE_STATUS_SUCCESS:
+                rewrite_success_count += 1
+            elif rewrite_result.query_rewrite_status != QUERY_REWRITE_STATUS_DISABLED:
+                rewrite_fallback_count += 1
+                if rewrite_result.query_rewrite_status in {
+                    QUERY_REWRITE_STATUS_ERROR_FALLBACK,
+                    QUERY_REWRITE_STATUS_TIMEOUT_FALLBACK,
+                    QUERY_REWRITE_STATUS_INVALID_RESPONSE_FALLBACK,
+                }:
+                    rewrite_failure_count += 1
 
         if has_expected_sources:
             mrr_score = mrr(retrieved_sources, example.expected_source_documents)
@@ -230,6 +295,20 @@ def evaluate_examples_for_k_values(
             {
                 "id": example.id,
                 "question": example.question,
+                "original_query": rewrite_result.original_query,
+                "rewrite_context": rewrite_result.rewrite_context,
+                "rewritten_query": rewrite_result.rewritten_query,
+                "query_used_for_retrieval": rewrite_result.query_used_for_retrieval,
+                "query_rewriting_enabled": rewrite_result.query_rewriting_enabled,
+                "query_rewrite_status": rewrite_result.query_rewrite_status,
+                "query_rewrite_model": rewrite_result.query_rewrite_model,
+                "query_rewrite_prompt_version": rewrite_result.query_rewrite_prompt_version,
+                "query_rewrite_latency_ms": rewrite_result.query_rewrite_latency_ms,
+                "query_rewrite_prompt_tokens": rewrite_result.query_rewrite_prompt_tokens,
+                "query_rewrite_completion_tokens": rewrite_result.query_rewrite_completion_tokens,
+                "query_rewrite_total_tokens": rewrite_result.query_rewrite_total_tokens,
+                "query_rewrite_estimated_cost": rewrite_result.query_rewrite_estimated_cost,
+                "query_rewrite_error": rewrite_result.query_rewrite_error,
                 "expected_source_documents": list(example.expected_source_documents),
                 "retrieved_sources": retrieved_sources,
                 "retrieved_chunk_ids": retrieved_chunk_ids,
@@ -260,6 +339,17 @@ def evaluate_examples_for_k_values(
         "recall_at_k": _mean_or_none(aggregate_recalls[max_k]),
         "mean_precision_at_k": _mean_or_none(aggregate_precisions[max_k]),
         "mrr": _mean_or_none(aggregate_mrrs),
+        "query_rewrite_total_latency_ms": rewrite_total_latency_ms,
+        "query_rewrite_avg_latency_ms": (
+            rewrite_total_latency_ms / rewrite_attempt_count if rewrite_attempt_count else 0.0
+        ),
+        "query_rewrite_success_count": rewrite_success_count,
+        "query_rewrite_fallback_count": rewrite_fallback_count,
+        "query_rewrite_failure_count": rewrite_failure_count,
+        "query_rewrite_total_prompt_tokens": rewrite_total_prompt_tokens,
+        "query_rewrite_total_completion_tokens": rewrite_total_completion_tokens,
+        "query_rewrite_total_tokens": rewrite_total_tokens,
+        "query_rewrite_estimated_total_cost": round(rewrite_estimated_total_cost, 6),
         "metrics_by_k": {
             str(current_k): {
                 "hit_at_k": _mean_or_none(aggregate_hits[current_k]),
@@ -304,6 +394,12 @@ def build_run_config(
         "embedding_dimension": settings.embedding_dimension,
         "vector_store_type": "pgvector" if settings.retriever_type in {"vector", "hybrid"} else None,
         "retrieval_strategy": settings.retriever_type,
+        "query_rewriting_enabled": settings.enable_query_rewriting,
+        "query_rewrite_model": settings.query_rewrite_model,
+        "query_rewrite_temperature": settings.query_rewrite_temperature,
+        "query_rewrite_prompt_version": settings.query_rewrite_prompt_version,
+        "query_rewrite_timeout_seconds": settings.query_rewrite_timeout_seconds,
+        "query_rewrite_max_tokens": settings.query_rewrite_max_tokens,
         "chunk_size": resolved_chunk_size,
         "chunk_overlap": resolved_chunk_overlap,
         "settings_used_by_retriever": {
@@ -347,6 +443,7 @@ def write_artifacts(
     results_json_path = output_dir / "results.json"
     results_csv_path = output_dir / "results.csv"
     config_path = output_dir / "config.json"
+    prompt_artifact_path: Path | None = None
 
     results_json_path.write_text(
         json.dumps(
@@ -369,12 +466,22 @@ def write_artifacts(
         encoding="utf-8",
     )
     _write_results_csv(results_csv_path, results)
+    if config.get("query_rewriting_enabled"):
+        prompt_version = str(config.get("query_rewrite_prompt_version") or "")
+        prompt_artifact_path = output_dir / f"query_rewrite_prompt_{prompt_version}.txt"
+        prompt_artifact_path.write_text(
+            get_query_rewrite_prompt_template(prompt_version),
+            encoding="utf-8",
+        )
 
-    return {
+    artifact_paths = {
         "results_json": results_json_path,
         "results_csv": results_csv_path,
         "config_json": config_path,
     }
+    if prompt_artifact_path is not None:
+        artifact_paths["query_rewrite_prompt_txt"] = prompt_artifact_path
+    return artifact_paths
 
 
 def build_tracking_run_name(
@@ -421,6 +528,12 @@ def log_run_to_tracker(
                 "chunk_overlap": config.get("chunk_overlap"),
                 "retrieval_min_similarity": settings.retrieval_min_similarity,
                 "git_commit_sha": config.get("git_commit_sha"),
+                "query_rewriting_enabled": config.get("query_rewriting_enabled"),
+                "query_rewrite_model": config.get("query_rewrite_model"),
+                "query_rewrite_temperature": config.get("query_rewrite_temperature"),
+                "query_rewrite_prompt_version": config.get("query_rewrite_prompt_version"),
+                "query_rewrite_timeout_seconds": config.get("query_rewrite_timeout_seconds"),
+                "query_rewrite_max_tokens": config.get("query_rewrite_max_tokens"),
             }
         )
         tracker.log_metrics(
@@ -437,6 +550,24 @@ def log_run_to_tracker(
                 "recall_at_k": summary["recall_at_k"],
                 "mean_precision_at_k": summary["mean_precision_at_k"],
                 "mrr": summary["mrr"],
+                "query_rewrite_total_latency_ms": summary.get("query_rewrite_total_latency_ms", 0),
+                "query_rewrite_avg_latency_ms": summary.get("query_rewrite_avg_latency_ms", 0.0),
+                "query_rewrite_success_count": summary.get("query_rewrite_success_count", 0),
+                "query_rewrite_fallback_count": summary.get("query_rewrite_fallback_count", 0),
+                "query_rewrite_failure_count": summary.get("query_rewrite_failure_count", 0),
+                "query_rewrite_total_prompt_tokens": summary.get(
+                    "query_rewrite_total_prompt_tokens",
+                    0,
+                ),
+                "query_rewrite_total_completion_tokens": summary.get(
+                    "query_rewrite_total_completion_tokens",
+                    0,
+                ),
+                "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens", 0),
+                "query_rewrite_estimated_total_cost": summary.get(
+                    "query_rewrite_estimated_total_cost",
+                    0.0,
+                ),
             }
         )
         for artifact_path in artifact_paths.values():
@@ -492,7 +623,13 @@ def run_retrieval_eval(
     )
 
     retrieval_service = RetrievalService(settings=settings)
-    summary, results = evaluate_examples(examples, retrieval_service, k=top_k)
+    query_rewriter = QueryRewriter(settings=settings) if settings.enable_query_rewriting else None
+    summary, results = evaluate_examples(
+        examples,
+        retrieval_service,
+        k=top_k,
+        query_rewriter=query_rewriter,
+    )
     config = build_run_config(
         settings=settings,
         dataset_path=resolved_dataset_path,
@@ -543,6 +680,20 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
     fieldnames = [
         "id",
         "question",
+        "original_query",
+        "rewrite_context",
+        "rewritten_query",
+        "query_used_for_retrieval",
+        "query_rewriting_enabled",
+        "query_rewrite_status",
+        "query_rewrite_model",
+        "query_rewrite_prompt_version",
+        "query_rewrite_latency_ms",
+        "query_rewrite_prompt_tokens",
+        "query_rewrite_completion_tokens",
+        "query_rewrite_total_tokens",
+        "query_rewrite_estimated_cost",
+        "query_rewrite_error",
         "expected_source_documents",
         "retrieved_sources",
         "retrieved_chunk_ids",
@@ -611,3 +762,10 @@ def _normalize_k_values(k_values: list[int]) -> list[int]:
 def _slugify_label(value: str) -> str:
     normalized = SAFE_LABEL_PATTERN.sub("-", value.strip().casefold()).strip("-")
     return normalized or "run"
+
+
+def _normalize_optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None

@@ -68,6 +68,11 @@ def create_retrieval_eval_run(
         settings,
         retriever_type=payload.retriever_type,
         retrieval_top_k=payload.top_k,
+        enable_query_rewriting=(
+            payload.enable_query_rewriting
+            if payload.enable_query_rewriting is not None
+            else settings.enable_query_rewriting
+        ),
     )
 
     try:
@@ -142,7 +147,14 @@ def create_retrieval_eval_sweep(
             sweep_config_path=Path("api_retrieval_sweep_request.json"),
             dataset_path=DEFAULT_DATASET_PATH.resolve(),
             output_dir=output_dir,
-            settings=settings,
+            settings=replace(
+                settings,
+                enable_query_rewriting=(
+                    payload.enable_query_rewriting
+                    if payload.enable_query_rewriting is not None
+                    else settings.enable_query_rewriting
+                ),
+            ),
             argv=["api:/api/evals/retrieval-sweeps"],
         )
     except FileNotFoundError as exc:
@@ -203,6 +215,9 @@ def _build_response_config(result: RetrievalEvalRunResult) -> dict[str, Any]:
         "embedding_provider": result.config.get("embedding_provider"),
         "embedding_model": result.config.get("embedding_model"),
         "embedding_dimension": result.config.get("embedding_dimension"),
+        "query_rewriting_enabled": result.config.get("query_rewriting_enabled"),
+        "query_rewrite_model": result.config.get("query_rewrite_model"),
+        "query_rewrite_prompt_version": result.config.get("query_rewrite_prompt_version"),
         "notes": result.config.get("notes"),
     }
 
@@ -217,6 +232,15 @@ def _build_response_metrics(result: RetrievalEvalRunResult) -> dict[str, Any]:
         "num_queries_evaluated": result.summary.get("num_queries_evaluated"),
         "num_queries_without_expected_source": result.summary.get(
             "num_queries_without_expected_source"
+        ),
+        "query_rewrite_avg_latency_ms": result.summary.get("query_rewrite_avg_latency_ms"),
+        "query_rewrite_total_latency_ms": result.summary.get("query_rewrite_total_latency_ms"),
+        "query_rewrite_success_count": result.summary.get("query_rewrite_success_count"),
+        "query_rewrite_fallback_count": result.summary.get("query_rewrite_fallback_count"),
+        "query_rewrite_failure_count": result.summary.get("query_rewrite_failure_count"),
+        "query_rewrite_total_tokens": result.summary.get("query_rewrite_total_tokens"),
+        "query_rewrite_estimated_total_cost": result.summary.get(
+            "query_rewrite_estimated_total_cost"
         ),
     }
 
@@ -274,6 +298,9 @@ def _build_sweep_run_response(row: dict[str, Any]) -> RetrievalEvalSweepRunRespo
             "embedding_provider": row.get("embedding_provider"),
             "embedding_model": row.get("embedding_model"),
             "embedding_dimension": row.get("embedding_dimension"),
+            "query_rewriting_enabled": row.get("query_rewriting_enabled"),
+            "query_rewrite_model": row.get("query_rewrite_model"),
+            "query_rewrite_prompt_version": row.get("query_rewrite_prompt_version"),
             "git_commit_sha": row.get("git_commit_sha"),
         },
         metrics={
@@ -286,6 +313,13 @@ def _build_sweep_run_response(row: dict[str, Any]) -> RetrievalEvalSweepRunRespo
             "num_queries_without_expected_source": row.get(
                 "num_queries_without_expected_source"
             ),
+            "query_rewrite_avg_latency_ms": row.get("query_rewrite_avg_latency_ms"),
+            "query_rewrite_total_latency_ms": row.get("query_rewrite_total_latency_ms"),
+            "query_rewrite_success_count": row.get("query_rewrite_success_count"),
+            "query_rewrite_fallback_count": row.get("query_rewrite_fallback_count"),
+            "query_rewrite_failure_count": row.get("query_rewrite_failure_count"),
+            "query_rewrite_total_tokens": row.get("query_rewrite_total_tokens"),
+            "query_rewrite_estimated_total_cost": row.get("query_rewrite_estimated_total_cost"),
         },
         artifacts={
             "output_dir": str(row.get("output_dir", "")),
