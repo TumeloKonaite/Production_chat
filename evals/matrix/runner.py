@@ -58,6 +58,7 @@ def run_experiment_matrix(
     retrieval_runner: RetrievalRunner | None = None,
     generation_runner: GenerationRunner = run_generation_eval,
     rag_runner: RagRunner = run_rag_eval,
+    matrix_run_id: str | None = None,
 ) -> ExperimentMatrixRunResult | ResolvedSuitePlan:
     suite = matrix_config.suites.get(suite_name)
     if suite is None:
@@ -71,8 +72,8 @@ def run_experiment_matrix(
     _validate_plan(plan=plan, confirm_full_run=confirm_full_run)
 
     run_started_at = datetime.now().astimezone()
-    matrix_run_id = f"{run_started_at.strftime('%Y-%m-%d_%H-%M-%S')}_{suite.name}"
-    experiment_output_dir = output_dir.resolve() / matrix_run_id
+    resolved_matrix_run_id = matrix_run_id or f"{run_started_at.strftime('%Y-%m-%d_%H-%M-%S')}_{suite.name}"
+    experiment_output_dir = output_dir.resolve() / resolved_matrix_run_id
     runs_output_dir = experiment_output_dir / "runs"
     runs_output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -225,7 +226,7 @@ def run_experiment_matrix(
     _write_json(
         manifest_path,
         {
-            "matrix_run_id": matrix_run_id,
+            "matrix_run_id": resolved_matrix_run_id,
             "suite": suite.name,
             "mode": suite.mode,
             "started_at": run_started_at.replace(microsecond=0).isoformat(),
@@ -239,7 +240,7 @@ def run_experiment_matrix(
     )
 
     return ExperimentMatrixRunResult(
-        matrix_run_id=matrix_run_id,
+        matrix_run_id=resolved_matrix_run_id,
         suite_name=suite.name,
         mode=suite.mode,
         output_dir=experiment_output_dir,

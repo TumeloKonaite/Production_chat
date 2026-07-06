@@ -2,22 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
 
 from app.api.dependencies.common_dependencies import get_app_settings
-from app.api.evals.routes import (
-    get_experiment_tracker_factory,
-    get_retrieval_eval_runner,
-    get_retrieval_sweep_runner,
-)
+from app.api.evals.routes import get_eval_job_runner, get_eval_run_service
 from app.config import Settings
 from app.main import app
-from evals.retrieval_eval_runner import (
-    RetrievalDatasetValidationSummary,
-    RetrievalEvalRunResult,
-)
+from app.services.evals.eval_run_service import EvalRunService
 
 
 @pytest.fixture(autouse=True)
@@ -61,215 +55,164 @@ def build_test_settings() -> Settings:
         dagshub_repo_owner=None,
         dagshub_repo_name=None,
         dagshub_token=None,
+        llm_provider="openai",
+        llm_model="gpt-4.1-mini",
+        llm_base_url="https://api.openai.com/v1",
+        llm_api_key="test-key",
+        knowledge_chunk_size=500,
+        knowledge_chunk_overlap=100,
         enable_query_rewriting=False,
         query_rewrite_model="openai:gpt-4.1-mini",
         query_rewrite_temperature=0.0,
         query_rewrite_prompt_version="v1",
         query_rewrite_timeout_seconds=10,
         query_rewrite_max_tokens=128,
+        enable_reranking=False,
+        reranker_type="none",
+        reranker_model="openai:gpt-4.1-mini",
+        reranker_initial_top_k=20,
+        reranker_final_top_k=5,
     )
 
 
-class FakeTrackerFactory:
-    def __init__(self) -> None:
-        self.calls: list[tuple[Settings, str]] = []
+class FakeEvalJobRunner:
+    def __init__(self, run_service: EvalRunService) -> None:
+        self.run_service = run_service
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
 
-    def __call__(self, settings: Settings, experiment_name: str) -> object:
-        self.calls.append((settings, experiment_name))
-        return object()
-
-
-class FakeRetrievalEvalRunner:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def __call__(self, **kwargs: object) -> RetrievalEvalRunResult:
-        self.calls.append(kwargs)
-        output_dir = Path("evals/results/retrieval/api-vector-k5-baseline")
-        return RetrievalEvalRunResult(
-            run_name="api-vector-k5-baseline",
-            mlflow_run_id="9355f8c9952f4829a7950b59f54e27ad",
-            output_dir=output_dir,
-            summary={
-                "hit_at_k": 0.4166666666666667,
-                "mrr": 0.3958333333333333,
-                "recall_at_k": 0.3159722222222222,
-                "mean_precision_at_k": 0.2638888888888889,
-                "num_queries_total": 25,
-                "num_queries_evaluated": 24,
-                "num_queries_without_expected_source": 1,
-                "query_rewrite_avg_latency_ms": 0.0,
-                "query_rewrite_total_latency_ms": 0,
-                "query_rewrite_success_count": 0,
-                "query_rewrite_fallback_count": 0,
-                "query_rewrite_failure_count": 0,
-                "query_rewrite_total_tokens": 0,
-                "query_rewrite_estimated_total_cost": 0.0,
-            },
-            results=[],
-            config={
-                "retriever_type": "vector",
-                "top_k": 5,
-                "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-                "embedding_provider": "hf",
-                "embedding_model": "all-MiniLM-L6-v2",
-                "embedding_dimension": 384,
-                "query_rewriting_enabled": False,
-                "query_rewrite_model": "openai:gpt-4.1-mini",
-                "query_rewrite_prompt_version": "v1",
-                "notes": "Triggered from protected backend API",
-            },
-            artifact_paths={
-                "results_json": output_dir / "results.json",
-                "results_csv": output_dir / "results.csv",
-                "config_json": output_dir / "config.json",
-            },
-            validation_summary=RetrievalDatasetValidationSummary(
-                total_queries=25,
-                queries_with_expected_sources=24,
-                queries_without_expected_sources=1,
-                missing_expected_source_ids=["q25"],
+    def resolve_matrix_plan(
+        self,
+        *,
+        suite_name: str,
+        dry_run: bool,
+        confirm_full_run: bool,
+    ) -> SimpleNamespace:
+        if suite_name == "rag_full" and not dry_run and not confirm_full_run:
+            raise ValueError("Suite rag_full requires confirm_full_run=true.")
+        if suite_name == "too_large":
+            raise ValueError("Refusing to run because planned combinations exceed max_combinations.")
+        return SimpleNamespace(
+            suite=SimpleNamespace(
+                name=suite_name,
+                mode="rag",
+                max_combinations=32,
             ),
+            retrieval_combinations=[{"top_k": 3}, {"top_k": 5}],
+            generation_combinations=[{"prompt_version": "v1"}, {"prompt_version": "v2"}],
+            total_planned_runs=4,
+            requires_confirmation=suite_name == "rag_full",
+        )
+
+    def run_retrieval_job(self, *, run_id: str, payload: dict[str, object], settings: Settings) -> None:
+        del settings
+        self.calls.append(("retrieval", run_id, payload))
+        self.run_service.update_run(
+            run_id,
+            status="completed",
+            summary_payload={
+                "run_id": run_id,
+                "mode": "retrieval",
+                "summary": {"hit_at_k": 0.75, "mrr": 0.5},
+            },
+            failures_payload={"run_id": run_id, "failures": []},
+            artifacts={"results_json": "runner_output/results.json"},
+        )
+
+    def run_generation_job(self, *, run_id: str, payload: dict[str, object], settings: Settings) -> None:
+        del settings
+        self.calls.append(("generation", run_id, payload))
+        self.run_service.update_run(
+            run_id,
+            status="completed",
+            summary_payload={
+                "run_id": run_id,
+                "mode": "generation",
+                "summary": {"pass_rate": 1.0, "average_quality_score": 4.5},
+            },
+            failures_payload={"run_id": run_id, "failures": []},
+            artifacts={"results_json": "runner_output/generation.json"},
+        )
+
+    def run_rag_job(self, *, run_id: str, payload: dict[str, object], settings: Settings) -> None:
+        del settings
+        self.calls.append(("rag", run_id, payload))
+        self.run_service.update_run(
+            run_id,
+            status="completed",
+            summary_payload={
+                "run_id": run_id,
+                "mode": "rag",
+                "summary": {"avg_answer_relevance": 0.91, "avg_faithfulness": 0.89},
+            },
+            failures_payload={"run_id": run_id, "failures": []},
+            artifacts={"results_json": "runner_output/rag.json"},
+        )
+
+    def run_matrix_job(self, *, run_id: str, payload: dict[str, object], settings: Settings) -> None:
+        del settings
+        self.calls.append(("matrix", run_id, payload))
+        self.run_service.update_run(
+            run_id,
+            status="completed_with_failures",
+            total_planned_runs=4,
+            successful_runs=3,
+            failed_runs=1,
+            summary_payload={
+                "run_id": run_id,
+                "suite": payload["suite"],
+                "mode": "rag",
+                "top_results": [
+                    {
+                        "rank": 1,
+                        "avg_answer_relevance": 0.91,
+                        "avg_faithfulness": 0.89,
+                    }
+                ],
+            },
+            failures_payload={
+                "run_id": run_id,
+                "failures": [
+                    {
+                        "run_id": "run_003",
+                        "mode": "rag",
+                        "error_type": "TimeoutError",
+                        "error_message": "Request timed out after 60 seconds",
+                        "config": {"prompt_version": "v2"},
+                    }
+                ],
+            },
+            artifacts={"summary_json": "runner_output/rag_summary.json"},
         )
 
 
-class FakeRetrievalSweepRunner:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def __call__(self, **kwargs: object) -> tuple[list[dict[str, object]], dict[str, Path]]:
-        self.calls.append(kwargs)
-        rows = [
-            {
-                "experiment_name": "retrieval-vector-k3",
-                "run_name": "retrieval-vector-k3-2026-07-03_170000_run_01_retrieval-vector-k3",
-                "rank": 1,
-                "is_best": True,
-                "chunk_size": 500,
-                "chunk_overlap": 100,
-                "retriever_type": "vector",
-                "top_k": 3,
-                "embedding_provider": "hf",
-                "embedding_model": "all-MiniLM-L6-v2",
-                "embedding_dimension": 384,
-                "query_rewriting": False,
-                "query_rewriting_enabled": False,
-                "query_rewrite_model": None,
-                "query_rewrite_prompt_version": None,
-                "reranker": "none",
-                "reranker_enabled": False,
-                "reranker_type": "none",
-                "reranker_model": None,
-                "reranker_initial_top_k": None,
-                "reranker_final_top_k": 3,
-                "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-                "git_commit_sha": "abc123",
-                "mrr": 0.62,
-                "recall_at_k": 0.71,
-                "precision_at_k": 0.45,
-                "mean_precision_at_k": 0.45,
-                "hit_at_k": 0.88,
-                "num_queries_total": 25,
-                "num_queries_evaluated": 24,
-                "num_queries_without_expected_source": 1,
-                "query_rewrite_avg_latency_ms": 0.0,
-                "query_rewrite_total_latency_ms": 0,
-                "query_rewrite_success_count": 0,
-                "query_rewrite_fallback_count": 0,
-                "query_rewrite_failure_count": 0,
-                "query_rewrite_total_tokens": 0,
-                "query_rewrite_estimated_total_cost": 0.0,
-                "mlflow_run_id": "mlflow-run-1",
-                "output_dir": "evals/results/retrieval_sweeps/run_01",
-                "results_json": "evals/results/retrieval_sweeps/run_01/results.json",
-                "results_csv": "evals/results/retrieval_sweeps/run_01/results.csv",
-                "config_json": "evals/results/retrieval_sweeps/run_01/config.json",
-            },
-            {
-                "experiment_name": "retrieval-keyword-k5",
-                "run_name": "retrieval-keyword-k5-2026-07-03_170001_run_02_retrieval-keyword-k5",
-                "rank": 2,
-                "is_best": False,
-                "chunk_size": 500,
-                "chunk_overlap": 100,
-                "retriever_type": "keyword",
-                "top_k": 5,
-                "embedding_provider": "hf",
-                "embedding_model": "all-MiniLM-L6-v2",
-                "embedding_dimension": 384,
-                "query_rewriting": False,
-                "query_rewriting_enabled": False,
-                "query_rewrite_model": None,
-                "query_rewrite_prompt_version": None,
-                "reranker": "none",
-                "reranker_enabled": False,
-                "reranker_type": "none",
-                "reranker_model": None,
-                "reranker_initial_top_k": None,
-                "reranker_final_top_k": 5,
-                "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-                "git_commit_sha": "abc123",
-                "mrr": 0.54,
-                "recall_at_k": 0.68,
-                "precision_at_k": 0.41,
-                "mean_precision_at_k": 0.41,
-                "hit_at_k": 0.82,
-                "num_queries_total": 25,
-                "num_queries_evaluated": 24,
-                "num_queries_without_expected_source": 1,
-                "query_rewrite_avg_latency_ms": 0.0,
-                "query_rewrite_total_latency_ms": 0,
-                "query_rewrite_success_count": 0,
-                "query_rewrite_fallback_count": 0,
-                "query_rewrite_failure_count": 0,
-                "query_rewrite_total_tokens": 0,
-                "query_rewrite_estimated_total_cost": 0.0,
-                "mlflow_run_id": "mlflow-run-2",
-                "output_dir": "evals/results/retrieval_sweeps/run_02",
-                "results_json": "evals/results/retrieval_sweeps/run_02/results.json",
-                "results_csv": "evals/results/retrieval_sweeps/run_02/results.csv",
-                "config_json": "evals/results/retrieval_sweeps/run_02/config.json",
-            },
-        ]
-        artifact_paths = {
-            "summary_json": Path("evals/results/retrieval_sweeps/retrieval_sweep_summary.json"),
-            "summary_csv": Path("evals/results/retrieval_sweeps/retrieval_sweep_summary.csv"),
-            "ranking_md": Path("evals/results/retrieval_sweeps/retrieval_sweep_ranking.md"),
-            "manifest_json": Path("evals/results/retrieval_sweeps/manifest.json"),
-        }
-        return rows, artifact_paths
+@pytest.fixture
+def run_service(tmp_path: Path) -> EvalRunService:
+    return EvalRunService(base_output_dir=tmp_path / "eval-runs")
 
 
-def test_retrieval_eval_run_rejects_missing_token() -> None:
+@pytest.fixture
+def fake_job_runner(run_service: EvalRunService) -> FakeEvalJobRunner:
+    return FakeEvalJobRunner(run_service)
+
+
+@pytest.fixture
+def client(run_service: EvalRunService, fake_job_runner: FakeEvalJobRunner) -> TestClient:
     app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_eval_run_service] = lambda: run_service
+    app.dependency_overrides[get_eval_job_runner] = lambda: fake_job_runner
+    return TestClient(app)
 
-    client = TestClient(app)
-    response = client.post("/api/evals/retrieval-runs", json={"retriever_type": "vector", "top_k": 5})
+
+def test_eval_run_rejects_missing_token(client: TestClient) -> None:
+    response = client.post("/api/evals/retrieval", json={"retriever_type": "vector", "top_k": 5})
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Invalid eval admin token."}
 
 
-def test_retrieval_eval_run_rejects_invalid_token() -> None:
-    app.dependency_overrides[get_app_settings] = build_test_settings
-
-    client = TestClient(app)
+def test_retrieval_eval_run_rejects_invalid_top_k(client: TestClient) -> None:
     response = client.post(
-        "/api/evals/retrieval-runs",
-        headers={"x-eval-admin-token": "wrong-secret"},
-        json={"retriever_type": "vector", "top_k": 5},
-    )
-
-    assert response.status_code == 401
-    assert response.json() == {"detail": "Invalid eval admin token."}
-
-
-def test_retrieval_eval_run_rejects_invalid_top_k() -> None:
-    app.dependency_overrides[get_app_settings] = build_test_settings
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/evals/retrieval-runs",
+        "/api/evals/retrieval",
         headers={"x-eval-admin-token": "eval-secret"},
         json={"retriever_type": "vector", "top_k": 0},
     )
@@ -277,290 +220,232 @@ def test_retrieval_eval_run_rejects_invalid_top_k() -> None:
     assert response.status_code == 422
 
 
-def test_retrieval_eval_run_rejects_unsupported_retriever_type() -> None:
-    app.dependency_overrides[get_app_settings] = build_test_settings
-
-    client = TestClient(app)
+def test_retrieval_eval_run_queues_job_and_exposes_status(
+    client: TestClient,
+    fake_job_runner: FakeEvalJobRunner,
+) -> None:
     response = client.post(
-        "/api/evals/retrieval-runs",
-        headers={"x-eval-admin-token": "eval-secret"},
-        json={"retriever_type": "semantic", "top_k": 5},
-    )
-
-    assert response.status_code == 422
-
-
-def test_retrieval_eval_run_calls_shared_runner_and_returns_result() -> None:
-    fake_runner = FakeRetrievalEvalRunner()
-    fake_tracker_factory = FakeTrackerFactory()
-    app.dependency_overrides[get_app_settings] = build_test_settings
-    app.dependency_overrides[get_retrieval_eval_runner] = lambda: fake_runner
-    app.dependency_overrides[get_experiment_tracker_factory] = lambda: fake_tracker_factory
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/evals/retrieval-runs",
+        "/api/evals/retrieval",
         headers={"x-eval-admin-token": "eval-secret"},
         json={
             "retriever_type": "vector",
             "top_k": 5,
-            "run_name": "api-vector-k5-baseline",
-            "notes": "Triggered from protected backend API",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "completed",
-        "run_name": "api-vector-k5-baseline",
-        "mlflow_run_id": "9355f8c9952f4829a7950b59f54e27ad",
-        "config": {
-            "retriever_type": "vector",
-            "top_k": 5,
-            "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-            "embedding_provider": "hf",
-            "embedding_model": "all-MiniLM-L6-v2",
-            "embedding_dimension": 384,
+            "embedding_model": "text-embedding-3-small",
+            "chunk_size": 500,
+            "chunk_overlap": 100,
             "query_rewriting_enabled": False,
-            "query_rewrite_model": "openai:gpt-4.1-mini",
-            "query_rewrite_prompt_version": "v1",
-            "notes": "Triggered from protected backend API",
-        },
-        "metrics": {
-            "hit_at_k": 0.4166666666666667,
-            "mrr": 0.3958333333333333,
-            "recall_at_k": 0.3159722222222222,
-            "mean_precision_at_k": 0.2638888888888889,
-            "num_queries_total": 25,
-            "num_queries_evaluated": 24,
-            "num_queries_without_expected_source": 1,
-            "query_rewrite_avg_latency_ms": 0.0,
-            "query_rewrite_total_latency_ms": 0,
-            "query_rewrite_success_count": 0,
-            "query_rewrite_fallback_count": 0,
-            "query_rewrite_failure_count": 0,
-            "query_rewrite_total_tokens": 0,
-            "query_rewrite_estimated_total_cost": 0.0,
-        },
-    }
-    assert len(fake_tracker_factory.calls) == 1
-    tracker_settings, experiment_name = fake_tracker_factory.calls[0]
-    assert tracker_settings.retriever_type == "vector"
-    assert tracker_settings.retrieval_top_k == 5
-    assert experiment_name == "personal-chatbot-model-comparison"
-    assert len(fake_runner.calls) == 1
-    assert fake_runner.calls[0]["settings"] == tracker_settings
-    assert fake_runner.calls[0]["top_k"] == 5
-    assert fake_runner.calls[0]["run_name"] == "api-vector-k5-baseline"
-    assert fake_runner.calls[0]["notes"] == "Triggered from protected backend API"
-    assert fake_runner.calls[0]["argv"] == ["api:/api/evals/retrieval-runs"]
-
-
-def test_retrieval_eval_run_allows_query_rewriting_override() -> None:
-    fake_runner = FakeRetrievalEvalRunner()
-    fake_tracker_factory = FakeTrackerFactory()
-    app.dependency_overrides[get_app_settings] = build_test_settings
-    app.dependency_overrides[get_retrieval_eval_runner] = lambda: fake_runner
-    app.dependency_overrides[get_experiment_tracker_factory] = lambda: fake_tracker_factory
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/evals/retrieval-runs",
-        headers={"x-eval-admin-token": "eval-secret"},
-        json={
-            "retriever_type": "vector",
-            "top_k": 5,
-            "enable_query_rewriting": True,
+            "reranking_enabled": False,
         },
     )
 
-    assert response.status_code == 200
-    tracker_settings, _ = fake_tracker_factory.calls[0]
-    assert tracker_settings.enable_query_rewriting is True
-    assert fake_runner.calls[0]["settings"].enable_query_rewriting is True
+    assert response.status_code == 202
+    payload = response.json()
+    run_id = payload["run_id"]
+    assert payload == {
+        "run_id": run_id,
+        "status": "queued",
+        "mode": "retrieval",
+        "suite": None,
+        "status_url": f"/api/evals/runs/{run_id}",
+    }
+    assert fake_job_runner.calls == [
+        (
+            "retrieval",
+            run_id,
+            {
+                "embedding_provider": None,
+                "embedding_model": "text-embedding-3-small",
+                "embedding_dimension": None,
+                "chunk_size": 500,
+                "chunk_overlap": 100,
+                "retriever_type": "vector",
+                "top_k": 5,
+                "query_rewriting_enabled": False,
+                "query_rewrite_model": None,
+                "query_rewrite_prompt_version": None,
+                "query_rewrite_temperature": None,
+                "reranking_enabled": False,
+                "reranker_type": None,
+                "reranker_model": None,
+                "reranker_initial_top_k": None,
+                "notes": None,
+            },
+        )
+    ]
+
+    status_response = client.get(
+        f"/api/evals/runs/{run_id}",
+        headers={"x-eval-admin-token": "eval-secret"},
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "completed"
 
 
-def test_retrieval_eval_sweep_calls_shared_runner_and_returns_result() -> None:
-    fake_runner = FakeRetrievalSweepRunner()
-    app.dependency_overrides[get_app_settings] = build_test_settings
-    app.dependency_overrides[get_retrieval_sweep_runner] = lambda: fake_runner
-
-    client = TestClient(app)
+def test_generation_eval_run_queues_job(client: TestClient, fake_job_runner: FakeEvalJobRunner) -> None:
     response = client.post(
-        "/api/evals/retrieval-sweeps",
+        "/api/evals/generation",
         headers={"x-eval-admin-token": "eval-secret"},
         json={
-            "experiments": [
-                {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
-                {"name": "retrieval-keyword-k5", "retriever_type": "keyword", "top_k": 5},
-            ]
+            "provider": "openai",
+            "llm_model": "gpt-4.1-mini",
+            "prompt_version": "v2_strict_grounding",
+            "temperature": 0.0,
+            "max_tokens": 800,
         },
+    )
+
+    assert response.status_code == 202
+    assert fake_job_runner.calls[0][0] == "generation"
+
+
+def test_rag_eval_run_queues_job(client: TestClient, fake_job_runner: FakeEvalJobRunner) -> None:
+    response = client.post(
+        "/api/evals/rag",
+        headers={"x-eval-admin-token": "eval-secret"},
+        json={
+            "retrieval": {
+                "retriever_type": "vector",
+                "top_k": 5,
+                "embedding_model": "text-embedding-3-small",
+                "chunk_size": 500,
+                "chunk_overlap": 100,
+            },
+            "generation": {
+                "provider": "openai",
+                "llm_model": "gpt-4.1-mini",
+                "prompt_version": "v2_strict_grounding",
+                "temperature": 0.0,
+            },
+        },
+    )
+
+    assert response.status_code == 202
+    assert fake_job_runner.calls[0][0] == "rag"
+
+
+def test_matrix_dry_run_returns_plan(client: TestClient) -> None:
+    response = client.post(
+        "/api/evals/matrix",
+        headers={"x-eval-admin-token": "eval-secret"},
+        json={"suite": "rag_medium", "dry_run": True},
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "status": "completed",
-        "runs": [
-            {
-                "experiment_name": "retrieval-vector-k3",
-                "run_name": "retrieval-vector-k3-2026-07-03_170000_run_01_retrieval-vector-k3",
-                "config": {
-                    "retriever_type": "vector",
-                    "top_k": 3,
-                    "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-                    "embedding_provider": "hf",
-                    "embedding_model": "all-MiniLM-L6-v2",
-                    "embedding_dimension": 384,
-                    "chunk_size": 500,
-                    "chunk_overlap": 100,
-                    "query_rewriting": False,
-                    "reranker": "none",
-                    "query_rewriting_enabled": False,
-                    "query_rewrite_model": None,
-                    "query_rewrite_prompt_version": None,
-                    "reranker_enabled": False,
-                    "reranker_type": "none",
-                    "reranker_model": None,
-                    "reranker_initial_top_k": None,
-                    "reranker_final_top_k": 3,
-                    "git_commit_sha": "abc123",
-                },
-                "metrics": {
-                    "hit_at_k": 0.88,
-                    "mrr": 0.62,
-                    "recall_at_k": 0.71,
-                    "precision_at_k": 0.45,
-                    "mean_precision_at_k": 0.45,
-                    "num_queries_total": 25,
-                    "num_queries_evaluated": 24,
-                    "num_queries_without_expected_source": 1,
-                    "query_rewrite_avg_latency_ms": 0.0,
-                    "query_rewrite_total_latency_ms": 0,
-                    "query_rewrite_success_count": 0,
-                    "query_rewrite_fallback_count": 0,
-                    "query_rewrite_failure_count": 0,
-                    "query_rewrite_total_tokens": 0,
-                    "query_rewrite_estimated_total_cost": 0.0,
-                },
-                "artifacts": {
-                    "rank": "1",
-                    "output_dir": "evals/results/retrieval_sweeps/run_01",
-                    "results_json": "evals/results/retrieval_sweeps/run_01/results.json",
-                    "results_csv": "evals/results/retrieval_sweeps/run_01/results.csv",
-                    "config_json": "evals/results/retrieval_sweeps/run_01/config.json",
-                },
-            },
-            {
-                "experiment_name": "retrieval-keyword-k5",
-                "run_name": "retrieval-keyword-k5-2026-07-03_170001_run_02_retrieval-keyword-k5",
-                "config": {
-                    "retriever_type": "keyword",
-                    "top_k": 5,
-                    "dataset_path": "evals/datasets/portfolio_eval_dataset.jsonl",
-                    "embedding_provider": "hf",
-                    "embedding_model": "all-MiniLM-L6-v2",
-                    "embedding_dimension": 384,
-                    "chunk_size": 500,
-                    "chunk_overlap": 100,
-                    "query_rewriting": False,
-                    "reranker": "none",
-                    "query_rewriting_enabled": False,
-                    "query_rewrite_model": None,
-                    "query_rewrite_prompt_version": None,
-                    "reranker_enabled": False,
-                    "reranker_type": "none",
-                    "reranker_model": None,
-                    "reranker_initial_top_k": None,
-                    "reranker_final_top_k": 5,
-                    "git_commit_sha": "abc123",
-                },
-                "metrics": {
-                    "hit_at_k": 0.82,
-                    "mrr": 0.54,
-                    "recall_at_k": 0.68,
-                    "precision_at_k": 0.41,
-                    "mean_precision_at_k": 0.41,
-                    "num_queries_total": 25,
-                    "num_queries_evaluated": 24,
-                    "num_queries_without_expected_source": 1,
-                    "query_rewrite_avg_latency_ms": 0.0,
-                    "query_rewrite_total_latency_ms": 0,
-                    "query_rewrite_success_count": 0,
-                    "query_rewrite_fallback_count": 0,
-                    "query_rewrite_failure_count": 0,
-                    "query_rewrite_total_tokens": 0,
-                    "query_rewrite_estimated_total_cost": 0.0,
-                },
-                "artifacts": {
-                    "rank": "2",
-                    "output_dir": "evals/results/retrieval_sweeps/run_02",
-                    "results_json": "evals/results/retrieval_sweeps/run_02/results.json",
-                    "results_csv": "evals/results/retrieval_sweeps/run_02/results.csv",
-                    "config_json": "evals/results/retrieval_sweeps/run_02/config.json",
-                },
-            },
-        ],
-        "artifacts": {
-            "summary_json": "evals\\results\\retrieval_sweeps\\retrieval_sweep_summary.json",
-            "summary_csv": "evals\\results\\retrieval_sweeps\\retrieval_sweep_summary.csv",
-            "ranking_md": "evals\\results\\retrieval_sweeps\\retrieval_sweep_ranking.md",
-            "manifest_json": "evals\\results\\retrieval_sweeps\\manifest.json",
-        },
+        "suite": "rag_medium",
+        "mode": "rag",
+        "dry_run": True,
+        "retrieval_combinations": 2,
+        "generation_combinations": 2,
+        "total_planned_runs": 4,
+        "max_combinations": 32,
+        "status": "ok",
     }
-    assert len(fake_runner.calls) == 1
-    sweep_config = fake_runner.calls[0]["sweep_config"]
-    assert [experiment.name for experiment in sweep_config.experiments] == [
-        "retrieval-vector-k3",
-        "retrieval-keyword-k5",
-    ]
-    assert fake_runner.calls[0]["argv"] == ["api:/api/evals/retrieval-sweeps"]
-    assert fake_runner.calls[0]["settings"].enable_query_rewriting is False
 
 
-def test_retrieval_eval_sweep_allows_query_rewriting_override() -> None:
-    fake_runner = FakeRetrievalSweepRunner()
-    app.dependency_overrides[get_app_settings] = build_test_settings
-    app.dependency_overrides[get_retrieval_sweep_runner] = lambda: fake_runner
-
-    client = TestClient(app)
+def test_matrix_run_requires_confirmation_for_full_suite(client: TestClient) -> None:
     response = client.post(
-        "/api/evals/retrieval-sweeps",
+        "/api/evals/matrix",
         headers={"x-eval-admin-token": "eval-secret"},
-        json={
-            "enable_query_rewriting": True,
-            "experiments": [
-                {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    assert fake_runner.calls[0]["settings"].enable_query_rewriting is True
-
-
-def test_retrieval_eval_sweep_rejects_duplicate_experiment_names() -> None:
-    app.dependency_overrides[get_app_settings] = build_test_settings
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/evals/retrieval-sweeps",
-        headers={"x-eval-admin-token": "eval-secret"},
-        json={
-            "experiments": [
-                {"name": "retrieval-vector-k3", "retriever_type": "vector", "top_k": 3},
-                {"name": "retrieval-vector-k3", "retriever_type": "keyword", "top_k": 5},
-            ]
-        },
+        json={"suite": "rag_full", "dry_run": False, "confirm_full_run": False},
     )
 
     assert response.status_code == 400
+    assert response.json() == {"detail": "Suite rag_full requires confirm_full_run=true."}
+
+
+def test_matrix_run_failure_details_are_available(
+    client: TestClient,
+    fake_job_runner: FakeEvalJobRunner,
+) -> None:
+    response = client.post(
+        "/api/evals/matrix",
+        headers={"x-eval-admin-token": "eval-secret"},
+        json={"suite": "rag_medium", "dry_run": False, "confirm_full_run": True},
+    )
+
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+    assert fake_job_runner.calls[0][0] == "matrix"
+
+    status_response = client.get(
+        f"/api/evals/runs/{run_id}",
+        headers={"x-eval-admin-token": "eval-secret"},
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "completed_with_failures"
+    assert status_response.json()["failed_runs"] == 1
+
+    summary_response = client.get(
+        f"/api/evals/runs/{run_id}/summary",
+        headers={"x-eval-admin-token": "eval-secret"},
+    )
+    assert summary_response.status_code == 200
+    assert summary_response.json()["top_results"][0]["rank"] == 1
+
+    failures_response = client.get(
+        f"/api/evals/runs/{run_id}/failures",
+        headers={"x-eval-admin-token": "eval-secret"},
+    )
+    assert failures_response.status_code == 200
+    assert failures_response.json() == {
+        "run_id": run_id,
+        "failures": [
+            {
+                "run_id": "run_003",
+                "mode": "rag",
+                "error_type": "TimeoutError",
+                "error_message": "Request timed out after 60 seconds",
+                "config": {"prompt_version": "v2"},
+            }
+        ],
+    }
+
+
+def test_list_eval_runs_supports_mode_filter(client: TestClient, run_service: EvalRunService) -> None:
+    run_service.create_run(
+        mode="retrieval",
+        config={"top_k": 5},
+        run_id="2026-07-04_15-20-11_retrieval",
+    )
+    run_service.create_run(
+        mode="matrix",
+        suite="rag_medium",
+        config={"suite": "rag_medium"},
+        run_id="2026-07-04_15-30-00_rag_medium",
+    )
+
+    response = client.get(
+        "/api/evals/runs?mode=matrix&limit=20",
+        headers={"x-eval-admin-token": "eval-secret"},
+    )
+
+    assert response.status_code == 200
     assert response.json() == {
-        "detail": "Retrieval sweep config contains duplicate experiment name: retrieval-vector-k3."
+        "runs": [
+            {
+                "run_id": "2026-07-04_15-30-00_rag_medium",
+                "mode": "matrix",
+                "status": "queued",
+                "suite": "rag_medium",
+                "started_at": None,
+                "completed_at": None,
+                "total_planned_runs": None,
+                "successful_runs": None,
+                "failed_runs": None,
+            }
+        ]
     }
 
 
 def test_eval_routes_are_registered() -> None:
     paths = set(app.openapi()["paths"])
 
-    assert "/api/evals/retrieval-runs" in paths
-    assert "/api/evals/retrieval-sweeps" in paths
+    assert "/api/evals/retrieval" in paths
+    assert "/api/evals/generation" in paths
+    assert "/api/evals/rag" in paths
+    assert "/api/evals/matrix" in paths
+    assert "/api/evals/runs" in paths
+    assert "/api/evals/runs/{run_id}" in paths
+    assert "/api/evals/runs/{run_id}/summary" in paths
+    assert "/api/evals/runs/{run_id}/failures" in paths
