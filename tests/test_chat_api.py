@@ -9,7 +9,12 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service, get_trace_service
+from app.api.dependencies.chat_dependencies import (
+    get_llm_service,
+    get_observability_tracer,
+    get_retrieval_service,
+    get_trace_service,
+)
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.config import Settings
 from app.domain.tracing import TraceStatus, TraceStepType
@@ -143,6 +148,26 @@ class FailingTraceService:
 
     def fail_trace(self, *args, **kwargs):
         raise TraceServiceError()
+
+
+class FailingObservabilityTracer:
+    def start_chat_request(self, **kwargs):
+        raise RuntimeError("Langfuse start failed")
+
+    def trace_retrieval(self, *args, **kwargs):
+        raise RuntimeError("Langfuse retrieval failed")
+
+    def trace_llm_call(self, *args, **kwargs):
+        raise RuntimeError("Langfuse llm failed")
+
+    def complete_chat_request(self, *args, **kwargs):
+        raise RuntimeError("Langfuse completion failed")
+
+    def capture_error(self, *args, **kwargs):
+        raise RuntimeError("Langfuse error failed")
+
+    def flush(self):
+        raise RuntimeError("Langfuse flush failed")
 
 
 def build_retrieved_chunk(
@@ -543,6 +568,21 @@ def test_trace_failures_do_not_break_chat_response(tmp_path) -> None:
     assert response.json()["message"] == "Tracing should not block this response."
     assert len(fetch_messages(session_factory)) == 2
     assert fetch_chat_traces(session_factory) == []
+
+
+def test_langfuse_failures_do_not_break_chat_response(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Langfuse should not block this response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+    app.dependency_overrides[get_observability_tracer] = lambda: FailingObservabilityTracer()
+
+    response = client.post("/chat", json={"message": "Tell me about Langfuse."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Langfuse should not block this response."
+    assert len(fetch_messages(session_factory)) == 2
+    assert len(fetch_chat_traces(session_factory)) == 1
 
 
 def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:

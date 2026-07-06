@@ -75,6 +75,12 @@ class RetrievalService:
         return self._embedding_descriptor.as_metadata()
 
     @property
+    def vector_store_name(self) -> str | None:
+        if self._retriever_type not in {"vector", "hybrid"}:
+            return None
+        return "pgvector"
+
+    @property
     def vectorstore(self) -> Any:
         if self._vectorstore is None:
             from langchain_postgres import PGVector

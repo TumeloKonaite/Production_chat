@@ -35,6 +35,7 @@ def test_get_settings_uses_default_openai_base_url(monkeypatch: pytest.MonkeyPat
 
 
 def test_get_settings_uses_custom_openai_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1/")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/custom/")
 
@@ -73,6 +74,13 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("RETRIEVER_TYPE", raising=False)
     monkeypatch.delenv("RETRIEVAL_TOP_K", raising=False)
     monkeypatch.delenv("EVAL_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("ENABLE_LANGFUSE_OBSERVABILITY", raising=False)
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_BASE_URL", raising=False)
+    monkeypatch.delenv("LANGFUSE_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("LANGFUSE_RELEASE", raising=False)
+    monkeypatch.delenv("LANGFUSE_SAMPLE_RATE", raising=False)
 
     settings = get_settings()
 
@@ -92,6 +100,13 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.reranker_model == "openai:gpt-4.1-mini"
     assert settings.reranker_initial_top_k == 20
     assert settings.reranker_final_top_k == 5
+    assert settings.enable_langfuse_observability is False
+    assert settings.langfuse_public_key is None
+    assert settings.langfuse_secret_key is None
+    assert settings.langfuse_base_url == "https://cloud.langfuse.com"
+    assert settings.langfuse_environment == "local"
+    assert settings.langfuse_release is None
+    assert settings.langfuse_sample_rate == 1.0
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,6 +159,28 @@ def test_get_settings_uses_configured_reranker_values(
     assert settings.reranker_final_top_k == 7
 
 
+def test_get_settings_uses_configured_langfuse_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com/")
+    monkeypatch.setenv("LANGFUSE_ENVIRONMENT", "production")
+    monkeypatch.setenv("LANGFUSE_RELEASE", "modal-v1")
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0.25")
+
+    settings = get_settings()
+
+    assert settings.enable_langfuse_observability is True
+    assert settings.langfuse_public_key == "pk-lf-test"
+    assert settings.langfuse_secret_key == "sk-lf-test"
+    assert settings.langfuse_base_url == "https://cloud.langfuse.com"
+    assert settings.langfuse_environment == "production"
+    assert settings.langfuse_release == "modal-v1"
+    assert settings.langfuse_sample_rate == 0.25
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value", "expected_message"),
     [
@@ -156,6 +193,7 @@ def test_get_settings_uses_configured_reranker_values(
         ("QUERY_REWRITE_MAX_TOKENS", "0", "QUERY_REWRITE_MAX_TOKENS must be greater than 0."),
         ("RERANKER_INITIAL_TOP_K", "0", "RERANKER_INITIAL_TOP_K must be greater than 0."),
         ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
+        ("LANGFUSE_SAMPLE_RATE", "-0.1", "LANGFUSE_SAMPLE_RATE must be greater than or equal to 0."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(
@@ -209,4 +247,44 @@ def test_get_settings_rejects_chunk_overlap_that_is_not_smaller_than_chunk_size(
     monkeypatch.setenv("CHUNK_OVERLAP", "500")
 
     with pytest.raises(ValueError, match="CHUNK_OVERLAP must be smaller than CHUNK_SIZE."):
+        get_settings()
+
+
+def test_get_settings_rejects_langfuse_sample_rate_above_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "1.1")
+
+    with pytest.raises(
+        ValueError,
+        match="LANGFUSE_SAMPLE_RATE must be less than or equal to 1.0.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_langfuse_public_key_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+
+    with pytest.raises(
+        ValueError,
+        match="LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_langfuse_secret_key_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true.",
+    ):
         get_settings()
