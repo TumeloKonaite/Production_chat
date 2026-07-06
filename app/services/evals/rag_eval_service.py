@@ -26,6 +26,7 @@ from app.services.chat.prompting import (
 )
 from app.services.llm import LLMChatMessage, LLMService
 from app.services.retrieval import RetrievedChunk, RetrievalService
+from evals.query_rewriter import QueryRewriter
 
 
 class RagEvalService:
@@ -37,12 +38,14 @@ class RagEvalService:
         retrieval_service: RetrievalService,
         judge_client: JudgeClient,
         eval_repository: EvalRepository | None = None,
+        query_rewriter: QueryRewriter | None = None,
     ) -> None:
         self._prompt_loader = prompt_loader
         self._llm_service = llm_service
         self._retrieval_service = retrieval_service
         self._judge_client = judge_client
         self._eval_repository = eval_repository
+        self._query_rewriter = query_rewriter
 
     def load_dataset(self, path: Path) -> list[RagEvalDatasetExample]:
         examples: list[RagEvalDatasetExample] = []
@@ -97,7 +100,12 @@ class RagEvalService:
         results: list[RagEvalQuestionResult] = []
 
         for example in examples:
-            retrieved_chunks = self._retrieval_service.retrieve(example.question, top_k=top_k)
+            retrieval_query = example.question
+            if self._query_rewriter is not None:
+                rewrite_result = await self._query_rewriter.rewrite_query_async(example.question)
+                retrieval_query = rewrite_result.query_used_for_retrieval
+
+            retrieved_chunks = self._retrieval_service.retrieve(retrieval_query, top_k=top_k)
             retrieved_sources = [chunk.source for chunk in retrieved_chunks]
             use_direct_fallback = should_use_direct_fallback(example.question, retrieved_chunks)
 

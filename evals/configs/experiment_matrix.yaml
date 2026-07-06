@@ -1,0 +1,60 @@
+suites:
+  retrieval_smoke:
+    mode: retrieval
+    description: Quick retrieval-only smoke test.
+    max_combinations: 4
+    retrieval:
+      embedding_model:
+        - all-MiniLM-L6-v2
+      retriever_type:
+        - vector
+      top_k:
+        - 5
+
+  generation_smoke:
+    mode: generation
+    description: Quick generation-only smoke test using fixed retrieved context.
+    max_combinations: 4
+    generation:
+      llm_model:
+        - gpt-4.1-mini
+      prompt_version:
+        - v1_professional
+
+  rag_medium:
+    mode: rag
+    description: End-to-end RAG comparison across retrieval and generation settings.
+    max_combinations: 16
+    retrieval:
+      retriever_type:
+        - vector
+        - hybrid
+      top_k:
+        - 3
+        - 5
+    generation:
+      llm_model:
+        - gpt-4.1-mini
+      prompt_version:
+        - v1_professional
+        - v2_warm_conversational
+
+  rag_full:
+    mode: rag
+    description: Larger end-to-end RAG matrix. Requires explicit confirmation.
+    max_combinations: 32
+    retrieval:
+      retriever_type:
+        - vector
+        - hybrid
+      top_k:
+        - 3
+        - 5
+        - 10
+    generation:
+      llm_model:
+        - gpt-4.1-mini
+        - openrouter:meta-llama/llama-3.1-70b-instruct
+      prompt_version:
+        - v1_professional
+        - v2_warm_conversational

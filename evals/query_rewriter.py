@@ -78,12 +78,20 @@ class QueryRewriter:
         *,
         context: str | None = None,
     ) -> QueryRewriteResult:
+        return asyncio.run(self.rewrite_query_async(original_query, context=context))
+
+    async def rewrite_query_async(
+        self,
+        original_query: str,
+        *,
+        context: str | None = None,
+    ) -> QueryRewriteResult:
         if not self._settings.enable_query_rewriting:
             return build_disabled_query_rewrite_result(
                 original_query=original_query,
                 rewrite_context=context,
             )
-        return asyncio.run(self._rewrite_query(original_query, context=context))
+        return await self._rewrite_query(original_query, context=context)
 
     async def _rewrite_query(
         self,
