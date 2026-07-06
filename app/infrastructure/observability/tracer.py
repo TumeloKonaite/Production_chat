@@ -92,6 +92,7 @@ class ObservabilityTracer(Protocol):
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        estimated_cost_usd: float | None,
         error_message: str | None = None,
     ) -> None:
         ...
@@ -305,26 +306,35 @@ class LangfuseTracer:
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        estimated_cost_usd: float | None,
         error_message: str | None = None,
     ) -> None:
         if not trace.is_active or observation is None:
             return
 
         try:
-            observation.update(
-                output={
+            update_payload: dict[str, object] = {
+                "output": {
                     "provider": provider,
                     "model": model,
                     "latency_ms": latency_ms,
                     "error": error_message,
                 },
-                usage_details={
-                    "input": input_tokens or 0,
-                    "output": output_tokens or 0,
-                    "total": total_tokens or 0,
-                }
-                if any(value is not None for value in (input_tokens, output_tokens, total_tokens))
-                else None,
+                "usage_details": (
+                    {
+                        "input": input_tokens or 0,
+                        "output": output_tokens or 0,
+                        "total": total_tokens or 0,
+                    }
+                    if any(value is not None for value in (input_tokens, output_tokens, total_tokens))
+                    else None
+                ),
+            }
+            if estimated_cost_usd is not None:
+                update_payload["cost_details"] = {"total": estimated_cost_usd}
+
+            observation.update(
+                **update_payload,
             )
         finally:
             observation.end()

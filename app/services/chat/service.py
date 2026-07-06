@@ -290,6 +290,7 @@ class ChatService:
                         input_tokens=None,
                         output_tokens=None,
                         total_tokens=None,
+                        estimated_cost_usd=None,
                         error_message=self._safe_trace_error_message(exc),
                     )
                     raise
@@ -303,6 +304,7 @@ class ChatService:
                     input_tokens=llm_response.token_usage.input_tokens,
                     output_tokens=llm_response.token_usage.output_tokens,
                     total_tokens=llm_response.token_usage.total_tokens,
+                    estimated_cost_usd=llm_response.estimated_cost_usd,
                 )
                 self._record_trace_step(
                     trace_id=trace_id,
@@ -964,6 +966,7 @@ class ChatService:
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        estimated_cost_usd: float | None,
         error_message: str | None = None,
     ) -> None:
         try:
@@ -976,6 +979,7 @@ class ChatService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
                 error_message=error_message,
             )
         except Exception:

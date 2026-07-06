@@ -218,6 +218,7 @@ def test_noop_tracer_methods_are_safe() -> None:
         input_tokens=10,
         output_tokens=5,
         total_tokens=15,
+        estimated_cost_usd=0.00042,
     )
     tracer.complete_chat_request(
         trace,
@@ -288,6 +289,7 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
         input_tokens=120,
         output_tokens=32,
         total_tokens=152,
+        estimated_cost_usd=0.000768,
     )
     tracer.complete_chat_request(
         trace,
@@ -372,6 +374,55 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
         "output": 32,
         "total": 152,
     }
+    assert llm_observation.updates[1]["cost_details"] == {
+        "total": 0.000768,
+    }
+
+
+def test_langfuse_tracer_omits_cost_details_when_cost_is_missing() -> None:
+    client, sdk_client, _ = build_client()
+    tracer = get_tracer(build_settings(), client=client)
+
+    trace = tracer.start_chat_request(
+        question="Tell me about the chatbot",
+        conversation_id="conversation-1",
+        session_id="session-1",
+        user_id="user-1",
+        endpoint="/chat",
+        endpoint_name="chat",
+        channel="web_chat",
+        llm_provider="openai",
+        llm_model="gpt-4.1-mini",
+    )
+    llm_observation = tracer.start_llm_call(
+        trace,
+        provider="openai",
+        model="gpt-4.1-mini",
+        temperature=None,
+        max_tokens=None,
+    )
+
+    tracer.complete_llm_call(
+        trace,
+        observation=llm_observation,
+        provider="openai",
+        model="gpt-4.1-mini",
+        latency_ms=81,
+        input_tokens=120,
+        output_tokens=32,
+        total_tokens=152,
+        estimated_cost_usd=None,
+    )
+
+    update_payload = sdk_client.child_observations[0].updates[1]
+    assert update_payload["usage_details"] == {
+        "input": 120,
+        "output": 32,
+        "total": 152,
+    }
+    assert "cost_details" not in update_payload
+
+
 def test_langfuse_tracer_honors_sample_rate() -> None:
     client, sdk_client, _ = build_client()
     tracer = LangfuseTracer(
