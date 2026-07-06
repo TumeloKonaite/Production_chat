@@ -81,6 +81,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("LANGFUSE_ENVIRONMENT", raising=False)
     monkeypatch.delenv("LANGFUSE_RELEASE", raising=False)
     monkeypatch.delenv("LANGFUSE_SAMPLE_RATE", raising=False)
+    monkeypatch.delenv("LANGFUSE_EXPORT_DEFAULT_LIMIT", raising=False)
 
     settings = get_settings()
 
@@ -107,6 +108,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.langfuse_environment == "local"
     assert settings.langfuse_release is None
     assert settings.langfuse_sample_rate == 1.0
+    assert settings.langfuse_export_default_limit == 100
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,6 +171,7 @@ def test_get_settings_uses_configured_langfuse_values(
     monkeypatch.setenv("LANGFUSE_ENVIRONMENT", "production")
     monkeypatch.setenv("LANGFUSE_RELEASE", "modal-v1")
     monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0.25")
+    monkeypatch.setenv("LANGFUSE_EXPORT_DEFAULT_LIMIT", "25")
 
     settings = get_settings()
 
@@ -179,6 +182,7 @@ def test_get_settings_uses_configured_langfuse_values(
     assert settings.langfuse_environment == "production"
     assert settings.langfuse_release == "modal-v1"
     assert settings.langfuse_sample_rate == 0.25
+    assert settings.langfuse_export_default_limit == 25
 
 
 @pytest.mark.parametrize(
@@ -194,6 +198,7 @@ def test_get_settings_uses_configured_langfuse_values(
         ("RERANKER_INITIAL_TOP_K", "0", "RERANKER_INITIAL_TOP_K must be greater than 0."),
         ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
         ("LANGFUSE_SAMPLE_RATE", "-0.1", "LANGFUSE_SAMPLE_RATE must be greater than or equal to 0."),
+        ("LANGFUSE_EXPORT_DEFAULT_LIMIT", "0", "LANGFUSE_EXPORT_DEFAULT_LIMIT must be greater than 0."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(
