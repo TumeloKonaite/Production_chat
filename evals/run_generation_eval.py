@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import asdict
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -28,6 +27,22 @@ from app.services.llm import LLMService
 DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "generation_eval_dataset.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results"
 DEFAULT_PROMPTS_DIR = ROOT_DIR / "app" / "infrastructure" / "prompts" / "templates"
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationEvalRunResult:
+    run_name: str
+    dataset_path: Path
+    dataset_version: str
+    prompt_version: str
+    model_config_id: str
+    judge_model_config_id: str | None
+    temperature: float
+    model_base_url: str
+    aggregate: object
+    records: list[object]
+    artifact_paths: dict[str, Path]
+    pricing_lookup_note: str | None
 
 
 def _safe_file_stem(value: str) -> str:
@@ -86,87 +101,137 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
-    settings = get_settings()
-    prompt_version = args.prompt_version or settings.default_prompt_version
-    prompt_loader = PromptLoader(prompts_dir=DEFAULT_PROMPTS_DIR)
-    llm_service = LLMService(settings=settings)
-    model_config = llm_service.get_model_config(args.model)
-    pricing_lookup_note: str | None = None
-    settings, llm_service, pricing_lookup_note = await _apply_openrouter_pricing_if_missing(
-        settings=settings,
-        llm_service=llm_service,
-        model_config_id=model_config.config_id,
-    )
-    model_config = llm_service.get_model_config(args.model)
-    judge_client = JudgeClient(settings=settings) if args.judge_model else None
-    eval_service = GenerationEvalService(
-        prompt_loader=prompt_loader,
-        llm_service=llm_service,
-        judge_client=judge_client,
-    )
-    examples = eval_service.load_dataset(args.dataset)
-    model_base_url = llm_service.get_model_base_url(model_config.config_id)
-    experiment_name = args.experiment_name or settings.mlflow_experiment_name
-    tracker = create_experiment_tracker(settings, experiment_name)
-
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    safe_model_config_id = _safe_file_stem(model_config.config_id)
-    run_name = f"generation-eval-{safe_model_config_id}-{timestamp}"
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        run = await eval_service.evaluate_dataset(
-            examples=examples,
-            prompt_version=prompt_version,
-            model_config_id=model_config.config_id,
+        result = await run_generation_eval(
+            settings=get_settings(),
+            dataset_path=args.dataset.resolve(),
+            output_dir=args.output_dir.resolve(),
+            model_config_id=args.model,
             judge_model_config_id=args.judge_model,
+            prompt_version=args.prompt_version,
             temperature=args.temperature,
+            experiment_name=args.experiment_name,
+            dataset_version=args.dataset_version,
         )
     except (LLMConfigurationError, LLMServiceError) as exc:
         raise SystemExit(
             "\n".join(
                 [
                     "Generation evaluation failed before results could be written.",
-                    f"Model config: {model_config.config_id}",
-                    f"Provider: {model_config.provider}",
-                    f"Model: {model_config.model}",
-                    f"Base URL: {model_base_url}",
+                    f"Dataset: {args.dataset}",
+                    f"Model config: {args.model or 'default'}",
                     f"Reason: {exc}",
                 ]
             )
         ) from exc
+    summary_text = Path(result.artifact_paths["summary_txt"]).read_text(encoding="utf-8")
+    print(summary_text, end="")
+    print(f"Detailed results written to: {result.artifact_paths['results_json']}")
+    print(f"Active base URL: {result.model_base_url}")
+    if result.pricing_lookup_note:
+        print(result.pricing_lookup_note)
+
+
+async def run_generation_eval(
+    *,
+    settings,
+    dataset_path: Path,
+    output_dir: Path,
+    model_config_id: str | None = None,
+    judge_model_config_id: str | None = None,
+    prompt_version: str | None = None,
+    temperature: float = 0.2,
+    experiment_name: str | None = None,
+    dataset_version: str = "generation_eval_dataset_v1",
+    tracker=None,
+    run_name: str | None = None,
+    argv: list[str] | None = None,
+) -> GenerationEvalRunResult:
+    resolved_prompt_version = prompt_version or settings.default_prompt_version
+    prompt_loader = PromptLoader(prompts_dir=DEFAULT_PROMPTS_DIR)
+    llm_service = LLMService(settings=settings)
+    model_config = llm_service.get_model_config(model_config_id)
+    resolved_settings, llm_service, pricing_lookup_note = await _apply_openrouter_pricing_if_missing(
+        settings=settings,
+        llm_service=llm_service,
+        model_config_id=model_config.config_id,
+    )
+    model_config = llm_service.get_model_config(model_config_id)
+    judge_client = JudgeClient(settings=resolved_settings) if judge_model_config_id else None
+    eval_service = GenerationEvalService(
+        prompt_loader=prompt_loader,
+        llm_service=llm_service,
+        judge_client=judge_client,
+    )
+    examples = eval_service.load_dataset(dataset_path)
+    model_base_url = llm_service.get_model_base_url(model_config.config_id)
+    experiment_tracker = tracker or create_experiment_tracker(
+        resolved_settings,
+        experiment_name or resolved_settings.mlflow_experiment_name,
+    )
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    safe_model_config_id = _safe_file_stem(model_config.config_id)
+    resolved_run_name = run_name or f"generation-eval-{safe_model_config_id}-{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    run = await eval_service.evaluate_dataset(
+        examples=examples,
+        prompt_version=resolved_prompt_version,
+        model_config_id=model_config.config_id,
+        judge_model_config_id=judge_model_config_id,
+        temperature=temperature,
+    )
     aggregate = run.aggregate
 
     result_payload = {
         "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
-        "dataset_path": str(args.dataset),
-        "dataset_version": args.dataset_version,
-        "prompt_version": prompt_version,
+        "dataset_path": str(dataset_path),
+        "dataset_version": dataset_version,
+        "prompt_version": resolved_prompt_version,
         "aggregate": asdict(aggregate),
         "records": eval_service.records_as_json(run.records),
     }
-    result_path = args.output_dir / f"{run_name}.json"
+    result_path = output_dir / f"{resolved_run_name}.json"
     result_path.write_text(json.dumps(result_payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
     summary_text = eval_service.render_summary(aggregate)
-    summary_path = args.output_dir / f"{run_name}.txt"
+    summary_path = output_dir / f"{resolved_run_name}.txt"
     summary_path.write_text(summary_text, encoding="utf-8")
+    config_path = output_dir / f"{resolved_run_name}_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "dataset_path": str(dataset_path),
+                "dataset_version": dataset_version,
+                "prompt_version": resolved_prompt_version,
+                "model_config_id": model_config.config_id,
+                "judge_model_config_id": judge_model_config_id,
+                "temperature": temperature,
+                "python_command_used": " ".join(argv or []),
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
-    if tracker.enabled:
-        with tracker.run(run_name):
-            tracker.log_params(
+    if experiment_tracker.enabled:
+        with experiment_tracker.run(resolved_run_name):
+            experiment_tracker.log_params(
                 {
-                    "dataset_path": str(args.dataset),
-                    "dataset_version": args.dataset_version,
-                    "prompt_version": prompt_version,
+                    "dataset_path": str(dataset_path),
+                    "dataset_version": dataset_version,
+                    "prompt_version": resolved_prompt_version,
                     "query_rewriting": False,
                     "reranker": "none",
                     "llm_provider": aggregate.model_provider,
                     "llm_model": aggregate.model_name,
                     "llm_base_url": aggregate.model_base_url,
                     "model_config_id": aggregate.model_config_id,
-                    "judge_model_config_id": args.judge_model,
-                    "temperature": args.temperature,
+                    "judge_model_config_id": judge_model_config_id,
+                    "temperature": temperature,
                     "retrieval_mode": "fixed_context",
                     "retriever_type": "fixed_context",
                 }
@@ -205,15 +270,29 @@ async def main() -> None:
                 metrics["average_cost_per_response_usd"] = (
                     aggregate.average_cost_per_response_usd or 0.0
                 )
-            tracker.log_metrics(metrics)
-            tracker.log_artifact(result_path)
-            tracker.log_artifact(summary_path)
+            experiment_tracker.log_metrics(metrics)
+            experiment_tracker.log_artifact(result_path)
+            experiment_tracker.log_artifact(summary_path)
+            experiment_tracker.log_artifact(config_path)
 
-    print(summary_text, end="")
-    print(f"Detailed results written to: {result_path}")
-    print(f"Active base URL: {model_base_url}")
-    if pricing_lookup_note:
-        print(pricing_lookup_note)
+    return GenerationEvalRunResult(
+        run_name=resolved_run_name,
+        dataset_path=dataset_path,
+        dataset_version=dataset_version,
+        prompt_version=resolved_prompt_version,
+        model_config_id=model_config.config_id,
+        judge_model_config_id=judge_model_config_id,
+        temperature=temperature,
+        model_base_url=model_base_url,
+        aggregate=aggregate,
+        records=list(run.records),
+        artifact_paths={
+            "results_json": result_path,
+            "summary_txt": summary_path,
+            "config_json": config_path,
+        },
+        pricing_lookup_note=pricing_lookup_note,
+    )
 
 
 async def _apply_openrouter_pricing_if_missing(
