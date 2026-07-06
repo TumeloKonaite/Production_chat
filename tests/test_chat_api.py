@@ -9,13 +9,14 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service
+from app.api.dependencies.chat_dependencies import get_llm_service, get_retrieval_service, get_trace_service
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.config import Settings
+from app.domain.tracing import TraceStatus, TraceStepType
 from app.infrastructure.llm import UnknownModelError
 from app.main import app
 from app.repositories.db.base import Base
-from app.repositories.models import Conversation, KnowledgeChunk, Message, RetrievalLog
+from app.repositories.models import ChatTrace, ChatTraceStep, Conversation, KnowledgeChunk, Message, RetrievalLog
 from app.services.llm import (
     LLMChatMessage,
     LLMGeneratedResponse,
@@ -24,6 +25,7 @@ from app.services.llm import (
     TokenUsage,
 )
 from app.services.retrieval import RetrievedChunk
+from app.services.tracing import TraceServiceError
 
 
 @pytest.fixture(autouse=True)
@@ -127,6 +129,20 @@ class FakeRetrievalService:
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         self.calls.append((query, top_k))
         return list(self.retrieved_chunks)
+
+
+class FailingTraceService:
+    def start_trace(self, **kwargs):
+        raise TraceServiceError()
+
+    def add_step(self, **kwargs):
+        raise TraceServiceError()
+
+    def complete_trace(self, *args, **kwargs):
+        raise TraceServiceError()
+
+    def fail_trace(self, *args, **kwargs):
+        raise TraceServiceError()
 
 
 def build_retrieved_chunk(
@@ -238,6 +254,18 @@ def fetch_retrieval_logs(session_factory: sessionmaker[Session]) -> list[Retriev
         return list(session.scalars(statement))
 
 
+def fetch_chat_traces(session_factory: sessionmaker[Session]) -> list[ChatTrace]:
+    with session_factory() as session:
+        statement = select(ChatTrace).order_by(ChatTrace.created_at.asc(), ChatTrace.id.asc())
+        return list(session.scalars(statement))
+
+
+def fetch_chat_trace_steps(session_factory: sessionmaker[Session]) -> list[ChatTraceStep]:
+    with session_factory() as session:
+        statement = select(ChatTraceStep).order_by(ChatTraceStep.step_index.asc(), ChatTraceStep.created_at.asc())
+        return list(session.scalars(statement))
+
+
 def store_knowledge_chunk(
     session_factory: sessionmaker[Session],
     *,
@@ -344,6 +372,51 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert messages[1].message_metadata == {}
 
 
+def test_chat_creates_internal_trace_records(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tumelo built a production-ready chatbot.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot project"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+    traces = fetch_chat_traces(session_factory)
+    steps = fetch_chat_trace_steps(session_factory)
+
+    assert len(traces) == 1
+    assert traces[0].status == TraceStatus.SUCCESS
+    assert traces[0].input_text == "Tell me about Tumelo's chatbot project"
+    assert traces[0].output_text == "Tumelo built a production-ready chatbot."
+    assert traces[0].llm_provider == "openai"
+    assert traces[0].llm_model == "gpt-4.1-mini"
+    assert traces[0].prompt_version == "v1_professional"
+    assert traces[0].retriever_type == "vector"
+    assert traces[0].trace_metadata["route"] == "/chat"
+    assert traces[0].trace_metadata["channel"] == "web_chat"
+    assert [step.step_type for step in steps] == [
+        TraceStepType.REQUEST_RECEIVED,
+        TraceStepType.RETRIEVAL_STARTED,
+        TraceStepType.RETRIEVAL_COMPLETED,
+        TraceStepType.PROMPT_BUILT,
+        TraceStepType.LLM_CALL_STARTED,
+        TraceStepType.LLM_CALL_COMPLETED,
+        TraceStepType.RESPONSE_GENERATED,
+    ]
+    assert [step.step_index for step in steps] == [1, 2, 3, 4, 5, 6, 7]
+    assert steps[2].output_payload == {
+        "retrieved_chunks": [
+            {
+                "chunk_id": "chunk-1",
+                "source": "projects.md",
+                "section": "Portfolio Chatbot",
+                "score": 0.91,
+            }
+        ]
+    }
+
+
 def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:
     fake_llm = FakeLLMService()
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
@@ -446,6 +519,30 @@ def test_llm_failures_leave_user_message_persisted_without_assistant_message(tmp
     messages = fetch_messages(session_factory)
     assert [message.role for message in messages] == ["user"]
     assert messages[0].content == "Hello"
+
+    traces = fetch_chat_traces(session_factory)
+    steps = fetch_chat_trace_steps(session_factory)
+    assert len(traces) == 1
+    assert traces[0].status == TraceStatus.ERROR
+    assert traces[0].error_message == "Unable to generate assistant response. Please try again."
+    assert "sk-test-should-not-leak" not in (traces[0].error_message or "")
+    assert steps[-1].step_type == TraceStepType.ERROR
+    assert steps[-1].error_message == "Unable to generate assistant response. Please try again."
+
+
+def test_trace_failures_do_not_break_chat_response(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Tracing should not block this response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+    app.dependency_overrides[get_trace_service] = lambda: FailingTraceService()
+
+    response = client.post("/chat", json={"message": "Tell me about tracing."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Tracing should not block this response."
+    assert len(fetch_messages(session_factory)) == 2
+    assert fetch_chat_traces(session_factory) == []
 
 
 def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
