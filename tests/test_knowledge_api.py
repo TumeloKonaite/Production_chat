@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 import pytest
@@ -90,11 +91,37 @@ def override_db_session() -> Generator[Session, None, None]:
     yield Session()
 
 
+class CapturingIngestionServiceFactory:
+    def __init__(self) -> None:
+        self.created_settings: list[Settings] = []
+        self.service = FakeKnowledgeIngestionService()
+
+    def __call__(self, settings: Settings | None = None) -> FakeKnowledgeIngestionService:
+        if settings is not None:
+            self.created_settings.append(settings)
+        return self.service
+
+
+class FakeTracker:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.run_names: list[str] = []
+        self.logged_params: list[dict[str, object]] = []
+
+    @contextmanager
+    def run(self, run_name: str):
+        self.run_names.append(run_name)
+        yield None
+
+    def log_params(self, params: dict[str, object]) -> None:
+        self.logged_params.append(params)
+
+
 def test_knowledge_ingest_rejects_missing_secret() -> None:
     app.dependency_overrides[get_app_settings] = build_test_settings
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_knowledge_ingestion_service_factory] = (
-        lambda: FakeKnowledgeIngestionService
+        lambda: (lambda settings=None: FakeKnowledgeIngestionService())
     )
 
     client = TestClient(app)
@@ -108,7 +135,7 @@ def test_knowledge_ingest_rejects_invalid_secret() -> None:
     app.dependency_overrides[get_app_settings] = build_test_settings
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_knowledge_ingestion_service_factory] = (
-        lambda: FakeKnowledgeIngestionService
+        lambda: (lambda settings=None: FakeKnowledgeIngestionService())
     )
 
     client = TestClient(app)
@@ -122,12 +149,10 @@ def test_knowledge_ingest_rejects_invalid_secret() -> None:
 
 
 def test_knowledge_ingest_accepts_valid_secret_and_returns_summary() -> None:
-    fake_service = FakeKnowledgeIngestionService()
+    factory = CapturingIngestionServiceFactory()
     app.dependency_overrides[get_app_settings] = build_test_settings
     app.dependency_overrides[get_db_session] = override_db_session
-    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: (
-        lambda: fake_service
-    )
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: factory
 
     client = TestClient(app)
     response = client.post(
@@ -138,13 +163,158 @@ def test_knowledge_ingest_accepts_valid_secret_and_returns_summary() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "experiment_name": None,
+        "embedding_provider": "hf",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dimension": 384,
         "documents_loaded": 2,
+        "chunks_created": 10,
         "results": [
             {"source": "profile.md", "chunk_count": 3},
             {"source": "projects.md", "chunk_count": 7},
         ],
     }
-    assert len(fake_service.calls) == 1
+    assert len(factory.service.calls) == 1
+    assert len(factory.created_settings) == 1
+    assert factory.created_settings[0].embedding_provider == "hf"
+    assert factory.created_settings[0].knowledge_embedding_model == "all-MiniLM-L6-v2"
+    assert factory.created_settings[0].embedding_dimension == 384
+
+
+def test_knowledge_ingest_accepts_request_level_hf_embedding_override() -> None:
+    factory = CapturingIngestionServiceFactory()
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: factory
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={
+            "experiment_name": "hf-minilm-baseline",
+            "embedding_provider": "hf",
+            "embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
+            "reset_existing_vectors": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["experiment_name"] == "hf-minilm-baseline"
+    assert response.json()["embedding_provider"] == "hf"
+    assert response.json()["embedding_model"] == "all-MiniLM-L6-v2"
+    assert response.json()["embedding_dimension"] == 384
+    assert factory.created_settings[0].embedding_provider == "hf"
+    assert factory.created_settings[0].knowledge_embedding_model == "all-MiniLM-L6-v2"
+    assert factory.created_settings[0].embedding_dimension == 384
+
+
+def test_knowledge_ingest_accepts_request_level_openai_embedding_override() -> None:
+    factory = CapturingIngestionServiceFactory()
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: factory
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={
+            "experiment_name": "openai-text-embedding-3-small",
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_dimension": 1536,
+            "reset_existing_vectors": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["experiment_name"] == "openai-text-embedding-3-small"
+    assert response.json()["embedding_provider"] == "openai"
+    assert response.json()["embedding_model"] == "text-embedding-3-small"
+    assert response.json()["embedding_dimension"] == 1536
+    assert factory.created_settings[0].embedding_provider == "openai"
+    assert factory.created_settings[0].knowledge_embedding_model == "text-embedding-3-small"
+    assert factory.created_settings[0].embedding_dimension == 1536
+
+
+def test_knowledge_ingest_rejects_partial_embedding_override() -> None:
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = (
+        lambda: (lambda settings=None: FakeKnowledgeIngestionService())
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"embedding_model": "text-embedding-3-small"},
+    )
+
+    assert response.status_code == 422
+    assert "embedding_provider, embedding_model, and embedding_dimension" in str(
+        response.json()
+    )
+
+
+def test_knowledge_ingest_requires_reset_flag_for_embedding_override() -> None:
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = (
+        lambda: (lambda settings=None: FakeKnowledgeIngestionService())
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_dimension": 1536,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "reset_existing_vectors=true is required" in str(response.json())
+
+
+def test_knowledge_ingest_logs_effective_embedding_config_when_tracking_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = CapturingIngestionServiceFactory()
+    tracker = FakeTracker()
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: factory
+    monkeypatch.setattr("app.api.knowledge.routes.create_experiment_tracker", lambda *_: tracker)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={
+            "experiment_name": "openai-text-embedding-3-small",
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_dimension": 1536,
+            "reset_existing_vectors": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert tracker.run_names == ["openai-text-embedding-3-small"]
+    assert tracker.logged_params == [
+        {
+            "experiment_name": "openai-text-embedding-3-small",
+            "embedding_provider": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_dimension": 1536,
+            "reset_existing_vectors": True,
+        }
+    ]
 
 
 def test_knowledge_ingest_returns_clear_server_error() -> None:
@@ -152,7 +322,7 @@ def test_knowledge_ingest_returns_clear_server_error() -> None:
     app.dependency_overrides[get_app_settings] = build_test_settings
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: (
-        lambda: fake_service
+        lambda settings=None: fake_service
     )
 
     client = TestClient(app)
