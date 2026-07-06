@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+import logging
+from time import perf_counter
 import uuid
 
 from app.config import Settings
+from app.domain.tracing import TraceStatus, TraceStepType
 from app.infrastructure.prompts import PromptLoader, normalize_prompt_version
 from app.repositories import (
     ConversationRepository,
@@ -26,6 +30,10 @@ from app.services.chat.errors import (
 )
 from app.services.llm.service import LLMChatMessage, LLMGeneratedResponse, TokenUsage
 from app.services.retrieval import RetrievedChunk, RetrievalService
+from app.services.tracing import TraceService, TraceServiceError
+
+logger = logging.getLogger(__name__)
+TRACE_PROMPT_PREVIEW_LIMIT = 4000
 
 @dataclass(frozen=True, slots=True)
 class ChatReply:
@@ -50,6 +58,7 @@ class ChatService:
         repository: ConversationRepository,
         knowledge_repository: KnowledgeRepository,
         retrieval_service: RetrievalService,
+        trace_service: TraceService | None,
         history_limit: int,
         retrieval_top_k: int,
         settings: Settings,
@@ -59,6 +68,7 @@ class ChatService:
         self.repository = repository
         self.knowledge_repository = knowledge_repository
         self.retrieval_service = retrieval_service
+        self.trace_service = trace_service
         self.history_limit = history_limit
         self.retrieval_top_k = retrieval_top_k
         self.settings = settings
@@ -132,6 +142,25 @@ class ChatService:
             model_config_id or conversation.model
         )
         conversation.model = selected_model_config.config_id
+        request_started_at = perf_counter()
+        trace_id = self._start_trace(
+            conversation_id=conversation.id,
+            message=normalized_message,
+            channel=channel,
+            message_metadata=message_metadata,
+            prompt_version=selected_prompt_version,
+            model_config_id=selected_model_config.config_id,
+        )
+        self._record_trace_step(
+            trace_id=trace_id,
+            step_type=TraceStepType.REQUEST_RECEIVED,
+            name="Chat request received",
+            input_payload={
+                "message": normalized_message,
+                "channel": channel,
+            },
+            metadata=self._build_trace_metadata(channel, message_metadata),
+        )
 
         try:
             # Persist the user turn before calling the LLM so failed generations still leave a trace.
@@ -146,47 +175,141 @@ class ChatService:
                 conversation.id,
                 limit=self.history_limit,
             )
-        except ConversationRepositoryError as exc:
-            raise ChatPersistenceError() from exc
-
-        retrieved_chunks = self._retrieve_chunks(normalized_message)
-        use_direct_fallback = should_use_direct_fallback(normalized_message, retrieved_chunks)
-        self._log_retrieval(
-            conversation_id=conversation.id,
-            message_id=user_message.id,
-            query=normalized_message,
-            retrieved_chunks=retrieved_chunks,
-            used_fallback=use_direct_fallback,
-        )
-
-        if use_direct_fallback:
-            llm_response = self._build_direct_response(
-                normalized_message,
-                prompt_version=selected_prompt_version,
-                model_config_id=selected_model_config.config_id,
-            )
-        else:
-            llm_messages = [
-                LLMChatMessage(role=stored_message.role, content=stored_message.content)
-                for stored_message in recent_messages
-            ]
-            system_prompt = build_chat_system_prompt(
-                base_prompt=base_prompt,
-                message=normalized_message,
+            retrieved_chunks = self._trace_retrieve_chunks(normalized_message, trace_id=trace_id)
+            use_direct_fallback = should_use_direct_fallback(normalized_message, retrieved_chunks)
+            self._log_retrieval(
+                conversation_id=conversation.id,
+                message_id=user_message.id,
+                query=normalized_message,
                 retrieved_chunks=retrieved_chunks,
-            )
-            llm_response = await self.llm_service.generate_response(
-                llm_messages,
-                system_prompt=system_prompt,
-                prompt_version=selected_prompt_version,
-                retrieval_config=self.settings.default_retrieval_config,
-                model_config_id=selected_model_config.config_id,
+                used_fallback=use_direct_fallback,
             )
 
-        # Only persist the assistant turn after the final response succeeds.
-        self._store_assistant_message(
-            conversation=conversation,
+            if use_direct_fallback:
+                self._record_trace_step(
+                    trace_id=trace_id,
+                    step_type=TraceStepType.PROMPT_BUILT,
+                    name="Direct fallback selected",
+                    output_payload={
+                        "direct_fallback": True,
+                        "retrieved_chunk_count": len(retrieved_chunks),
+                        "prompt_version": selected_prompt_version,
+                    },
+                )
+                llm_response = self._build_direct_response(
+                    normalized_message,
+                    prompt_version=selected_prompt_version,
+                    model_config_id=selected_model_config.config_id,
+                )
+            else:
+                llm_messages = [
+                    LLMChatMessage(role=stored_message.role, content=stored_message.content)
+                    for stored_message in recent_messages
+                ]
+                prompt_started_at = perf_counter()
+                system_prompt = build_chat_system_prompt(
+                    base_prompt=base_prompt,
+                    message=normalized_message,
+                    retrieved_chunks=retrieved_chunks,
+                )
+                self._record_trace_step(
+                    trace_id=trace_id,
+                    step_type=TraceStepType.PROMPT_BUILT,
+                    name="System prompt built",
+                    output_payload={
+                        "prompt_version": selected_prompt_version,
+                        "history_message_count": len(llm_messages),
+                        "retrieved_chunk_count": len(retrieved_chunks),
+                        "system_prompt": self._truncate_text(system_prompt),
+                        "truncated": len(system_prompt) > TRACE_PROMPT_PREVIEW_LIMIT,
+                    },
+                    latency_ms=self._elapsed_ms(prompt_started_at),
+                )
+                llm_started_at = self._utcnow()
+                llm_timer = perf_counter()
+                self._record_trace_step(
+                    trace_id=trace_id,
+                    step_type=TraceStepType.LLM_CALL_STARTED,
+                    status=TraceStatus.STARTED,
+                    name="LLM call started",
+                    input_payload={
+                        "model_config_id": selected_model_config.config_id,
+                        "provider": selected_model_config.provider,
+                        "model": selected_model_config.model,
+                        "message_count": len(llm_messages),
+                    },
+                    started_at=llm_started_at,
+                )
+                llm_response = await self.llm_service.generate_response(
+                    llm_messages,
+                    system_prompt=system_prompt,
+                    prompt_version=selected_prompt_version,
+                    retrieval_config=self.settings.default_retrieval_config,
+                    model_config_id=selected_model_config.config_id,
+                )
+                llm_latency_ms = llm_response.latency_ms or self._elapsed_ms(llm_timer)
+                self._record_trace_step(
+                    trace_id=trace_id,
+                    step_type=TraceStepType.LLM_CALL_COMPLETED,
+                    name="LLM call completed",
+                    output_payload={
+                        "model_config_id": llm_response.model_config_id,
+                        "provider": llm_response.model_provider,
+                        "model": llm_response.model_name,
+                        "token_usage": {
+                            "input_tokens": llm_response.token_usage.input_tokens,
+                            "output_tokens": llm_response.token_usage.output_tokens,
+                            "total_tokens": llm_response.token_usage.total_tokens,
+                        },
+                        "estimated_cost_usd": llm_response.estimated_cost_usd,
+                    },
+                    latency_ms=llm_latency_ms,
+                    started_at=llm_started_at,
+                    completed_at=self._utcnow(),
+                )
+
+            # Only persist the assistant turn after the final response succeeds.
+            self._store_assistant_message(
+                conversation=conversation,
+                llm_response=llm_response,
+                channel=channel,
+                message_metadata=message_metadata,
+            )
+        except ConversationRepositoryError as exc:
+            self._fail_trace(
+                trace_id=trace_id,
+                exc=exc,
+                started_at=request_started_at,
+                metadata={"conversation_id": conversation.id},
+            )
+            raise ChatPersistenceError() from exc
+        except Exception as exc:
+            self._fail_trace(
+                trace_id=trace_id,
+                exc=exc,
+                started_at=request_started_at,
+                metadata={"conversation_id": conversation.id},
+            )
+            raise
+
+        total_latency_ms = self._elapsed_ms(request_started_at)
+        self._record_trace_step(
+            trace_id=trace_id,
+            step_type=TraceStepType.RESPONSE_GENERATED,
+            name="Response generated",
+            output_payload={
+                "conversation_id": conversation.id,
+                "model_config_id": llm_response.model_config_id,
+                "estimated_cost_usd": llm_response.estimated_cost_usd,
+            },
+            latency_ms=total_latency_ms,
+            completed_at=self._utcnow(),
+        )
+        self._complete_trace(
+            trace_id=trace_id,
+            output_text=llm_response.message,
             llm_response=llm_response,
+            latency_ms=total_latency_ms,
             channel=channel,
             message_metadata=message_metadata,
         )
@@ -303,6 +426,52 @@ class ChatService:
             return self.retrieval_service.retrieve(message, top_k=self.retrieval_top_k)
         except KnowledgeRepositoryError as exc:
             raise ChatServiceError() from exc
+
+    def _trace_retrieve_chunks(
+        self,
+        message: str,
+        *,
+        trace_id: str | None,
+    ) -> list[RetrievedChunk]:
+        started_at = self._utcnow()
+        retrieval_timer = perf_counter()
+        self._record_trace_step(
+            trace_id=trace_id,
+            step_type=TraceStepType.RETRIEVAL_STARTED,
+            status=TraceStatus.STARTED,
+            name="Retrieval started",
+            input_payload={
+                "query": message,
+                "top_k": self.retrieval_top_k,
+                "retriever_type": self.settings.retriever_type,
+            },
+            started_at=started_at,
+        )
+        retrieved_chunks = self._retrieve_chunks(message)
+        self._record_trace_step(
+            trace_id=trace_id,
+            step_type=TraceStepType.RETRIEVAL_COMPLETED,
+            name="Retrieval completed",
+            input_payload={
+                "query": message,
+                "top_k": self.retrieval_top_k,
+            },
+            output_payload={
+                "retrieved_chunks": [
+                    {
+                        "chunk_id": item.metadata.get("chunk_id", item.id),
+                        "source": item.source,
+                        "section": item.section,
+                        "score": item.similarity,
+                    }
+                    for item in retrieved_chunks
+                ]
+            },
+            latency_ms=self._elapsed_ms(retrieval_timer),
+            started_at=started_at,
+            completed_at=self._utcnow(),
+        )
+        return retrieved_chunks
 
     def _retrieve_broad_project_chunks(self, message: str) -> list[RetrievedChunk]:
         if not is_broad_project_query(message):
@@ -431,3 +600,195 @@ class ChatService:
             return None
         normalized_visitor_name = visitor_name.strip()
         return normalized_visitor_name or None
+
+    def _start_trace(
+        self,
+        *,
+        conversation_id: str,
+        message: str,
+        channel: str,
+        message_metadata: dict[str, object],
+        prompt_version: str,
+        model_config_id: str,
+    ) -> str | None:
+        if self.trace_service is None:
+            return None
+
+        try:
+            trace = self.trace_service.start_trace(
+                conversation_id=conversation_id,
+                user_id=self._extract_optional_string(message_metadata, "user_id"),
+                request_id=self._extract_optional_string(message_metadata, "request_id"),
+                session_id=self._extract_optional_string(message_metadata, "session_id"),
+                input_text=message,
+                status=TraceStatus.STARTED,
+                llm_provider=self._extract_model_provider(model_config_id),
+                llm_model=self._extract_model_name(model_config_id),
+                prompt_version=prompt_version,
+                retriever_type=self.settings.retriever_type,
+                embedding_provider=self.settings.embedding_provider,
+                embedding_model=self.settings.knowledge_embedding_model,
+                metadata=self._build_trace_metadata(channel, message_metadata),
+            )
+        except TraceServiceError:
+            logger.warning("Trace start failed.", exc_info=True)
+            return None
+
+        return trace.id
+
+    def _record_trace_step(
+        self,
+        *,
+        trace_id: str | None,
+        step_type: TraceStepType,
+        status: TraceStatus = TraceStatus.SUCCESS,
+        name: str | None = None,
+        input_payload: dict[str, object] | None = None,
+        output_payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        latency_ms: int | None = None,
+        error_message: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        if self.trace_service is None or trace_id is None:
+            return
+
+        try:
+            self.trace_service.add_step(
+                trace_id=trace_id,
+                step_type=step_type,
+                status=status,
+                name=name,
+                input_payload=input_payload,
+                output_payload=output_payload,
+                metadata=metadata,
+                latency_ms=latency_ms,
+                error_message=error_message,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
+        except TraceServiceError:
+            logger.warning("Trace step write failed.", exc_info=True)
+
+    def _complete_trace(
+        self,
+        *,
+        trace_id: str | None,
+        output_text: str,
+        llm_response: LLMGeneratedResponse,
+        latency_ms: int,
+        channel: str,
+        message_metadata: dict[str, object],
+    ) -> None:
+        if self.trace_service is None or trace_id is None:
+            return
+
+        try:
+            self.trace_service.complete_trace(
+                trace_id,
+                output_text=output_text,
+                status=TraceStatus.SUCCESS,
+                llm_provider=llm_response.model_provider,
+                llm_model=llm_response.model_name,
+                prompt_version=llm_response.prompt_version,
+                retriever_type=self.settings.retriever_type,
+                embedding_provider=self.settings.embedding_provider,
+                embedding_model=self.settings.knowledge_embedding_model,
+                input_tokens=llm_response.token_usage.input_tokens,
+                output_tokens=llm_response.token_usage.output_tokens,
+                total_tokens=llm_response.token_usage.total_tokens,
+                estimated_cost_usd=llm_response.estimated_cost_usd,
+                latency_ms=latency_ms,
+                metadata=self._build_trace_metadata(channel, message_metadata),
+            )
+        except TraceServiceError:
+            logger.warning("Trace completion failed.", exc_info=True)
+
+    def _fail_trace(
+        self,
+        *,
+        trace_id: str | None,
+        exc: Exception,
+        started_at: float,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        safe_error_message = self._safe_trace_error_message(exc)
+        self._record_trace_step(
+            trace_id=trace_id,
+            step_type=TraceStepType.ERROR,
+            status=TraceStatus.ERROR,
+            name="Request failed",
+            metadata=metadata,
+            latency_ms=self._elapsed_ms(started_at),
+            error_message=safe_error_message,
+            completed_at=self._utcnow(),
+        )
+        if self.trace_service is None or trace_id is None:
+            return
+
+        try:
+            self.trace_service.fail_trace(
+                trace_id,
+                error_message=safe_error_message,
+                latency_ms=self._elapsed_ms(started_at),
+                metadata=metadata,
+            )
+        except TraceServiceError:
+            logger.warning("Trace failure write failed.", exc_info=True)
+
+    def _build_trace_metadata(
+        self,
+        channel: str,
+        message_metadata: dict[str, object],
+    ) -> dict[str, object]:
+        metadata = {
+            "channel": channel,
+            "route": "/api/tavus/tools/ask-tumelo" if channel == "tavus_video" else "/chat",
+        }
+        metadata.update(message_metadata)
+        return metadata
+
+    def _safe_trace_error_message(self, exc: Exception) -> str:
+        if isinstance(exc, (ChatPersistenceError, ConversationRepositoryError)):
+            return "Unable to save chat conversation. Please try again."
+        if exc.__class__.__name__ == "LLMServiceError":
+            return "Unable to generate assistant response. Please try again."
+        if isinstance(exc, ChatServiceError):
+            return "Unable to generate assistant response. Please try again."
+        return exc.__class__.__name__
+
+    def _extract_optional_string(
+        self,
+        metadata: dict[str, object],
+        key: str,
+    ) -> str | None:
+        value = metadata.get(key)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _extract_model_provider(self, model_config_id: str) -> str | None:
+        if ":" not in model_config_id:
+            return None
+        provider, _model = model_config_id.split(":", 1)
+        normalized_provider = provider.strip()
+        return normalized_provider or None
+
+    def _extract_model_name(self, model_config_id: str) -> str:
+        if ":" not in model_config_id:
+            return model_config_id
+        _provider, model = model_config_id.split(":", 1)
+        return model.strip() or model_config_id
+
+    def _truncate_text(self, value: str) -> str:
+        if len(value) <= TRACE_PROMPT_PREVIEW_LIMIT:
+            return value
+        return value[:TRACE_PROMPT_PREVIEW_LIMIT]
+
+    def _elapsed_ms(self, started_at: float) -> int:
+        return max(0, int((perf_counter() - started_at) * 1000))
+
+    def _utcnow(self) -> datetime:
+        return datetime.now(UTC)
