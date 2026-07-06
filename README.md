@@ -120,6 +120,13 @@ TAVUS_TOOL_SECRET=
 INGESTION_API_SECRET=
 DEFAULT_MODEL_CONFIG_ID=openai:gpt-4.1-mini
 MODEL_CONFIGS_JSON=
+ENABLE_LANGFUSE_OBSERVABILITY=false
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_ENVIRONMENT=local
+LANGFUSE_RELEASE=
+LANGFUSE_SAMPLE_RATE=1.0
 EMBEDDING_PROVIDER=hf
 KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
@@ -513,6 +520,28 @@ MODEL_CONFIGS_JSON=[
 Set `DEFAULT_MODEL_CONFIG_ID` to one of those custom IDs, or pass a custom `model_config_id` per request or eval run.
 This makes it possible to compare direct OpenAI models and OpenRouter-backed models without restarting the app to swap API keys.
 If a model config ID is unknown, the backend fails with a clear validation error listing available IDs.
+
+### Langfuse observability
+
+Langfuse is optional request-level observability for chat, retrieval, and LLM execution. It stays disabled by default and complements, rather than replaces, MLflow or DagsHub experiment tracking.
+
+Set:
+
+```env
+ENABLE_LANGFUSE_OBSERVABILITY=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_ENVIRONMENT=local
+LANGFUSE_RELEASE=modal-v1
+LANGFUSE_SAMPLE_RATE=1.0
+```
+
+- When `ENABLE_LANGFUSE_OBSERVABILITY=false`, the backend starts normally without Langfuse credentials.
+- When `ENABLE_LANGFUSE_OBSERVABILITY=true`, both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are required.
+- Retrieval traces log source names, chunk IDs, scores, and short content previews only; full retrieved documents are not sent by default.
+- The chat flow performs a best-effort `flush()` after each request for short-lived deployments such as Modal.
+- Keep MLflow and DagsHub enabled separately for experiment runs, metrics, and eval comparisons.
 
 ### Local-only MLflow tracking
 

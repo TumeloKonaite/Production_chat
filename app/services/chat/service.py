@@ -8,6 +8,7 @@ import uuid
 
 from app.config import Settings
 from app.domain.tracing import TraceStatus, TraceStepType
+from app.infrastructure.observability import ObservabilityTrace, ObservabilityTracer
 from app.infrastructure.prompts import PromptLoader, normalize_prompt_version
 from app.repositories import (
     ConversationRepository,
@@ -34,6 +35,10 @@ from app.services.tracing import TraceService, TraceServiceError
 
 logger = logging.getLogger(__name__)
 TRACE_PROMPT_PREVIEW_LIMIT = 4000
+OBSERVABILITY_ENDPOINT_BY_CHANNEL = {
+    "tavus_video": "/api/tavus/tools/ask-tumelo",
+    "web_chat": "/chat",
+}
 
 @dataclass(frozen=True, slots=True)
 class ChatReply:
@@ -59,6 +64,7 @@ class ChatService:
         knowledge_repository: KnowledgeRepository,
         retrieval_service: RetrievalService,
         trace_service: TraceService | None,
+        observability_tracer: ObservabilityTracer,
         history_limit: int,
         retrieval_top_k: int,
         settings: Settings,
@@ -69,6 +75,7 @@ class ChatService:
         self.knowledge_repository = knowledge_repository
         self.retrieval_service = retrieval_service
         self.trace_service = trace_service
+        self.observability_tracer = observability_tracer
         self.history_limit = history_limit
         self.retrieval_top_k = retrieval_top_k
         self.settings = settings
@@ -151,6 +158,13 @@ class ChatService:
             prompt_version=selected_prompt_version,
             model_config_id=selected_model_config.config_id,
         )
+        observability_trace = self._start_observability_trace(
+            conversation_id=conversation.id,
+            message=normalized_message,
+            channel=channel,
+            message_metadata=message_metadata,
+            model_config_id=selected_model_config.config_id,
+        )
         self._record_trace_step(
             trace_id=trace_id,
             step_type=TraceStepType.REQUEST_RECEIVED,
@@ -175,7 +189,20 @@ class ChatService:
                 conversation.id,
                 limit=self.history_limit,
             )
-            retrieved_chunks = self._trace_retrieve_chunks(normalized_message, trace_id=trace_id)
+            retrieval_observation = self._start_observability_retrieval(
+                observability_trace,
+                message=normalized_message,
+            )
+            retrieved_chunks, retrieval_latency_ms = self._trace_retrieve_chunks(
+                normalized_message,
+                trace_id=trace_id,
+            )
+            self._complete_observability_retrieval(
+                observability_trace,
+                retrieval_observation=retrieval_observation,
+                retrieved_chunks=retrieved_chunks,
+                latency_ms=retrieval_latency_ms,
+            )
             use_direct_fallback = should_use_direct_fallback(normalized_message, retrieved_chunks)
             self._log_retrieval(
                 conversation_id=conversation.id,
@@ -240,14 +267,43 @@ class ChatService:
                     },
                     started_at=llm_started_at,
                 )
-                llm_response = await self.llm_service.generate_response(
-                    llm_messages,
-                    system_prompt=system_prompt,
-                    prompt_version=selected_prompt_version,
-                    retrieval_config=self.settings.default_retrieval_config,
-                    model_config_id=selected_model_config.config_id,
+                llm_observation = self._start_observability_llm_call(
+                    observability_trace,
+                    provider=selected_model_config.provider,
+                    model=selected_model_config.model,
                 )
+                try:
+                    llm_response = await self.llm_service.generate_response(
+                        llm_messages,
+                        system_prompt=system_prompt,
+                        prompt_version=selected_prompt_version,
+                        retrieval_config=self.settings.default_retrieval_config,
+                        model_config_id=selected_model_config.config_id,
+                    )
+                except Exception as exc:
+                    self._complete_observability_llm_call(
+                        observability_trace,
+                        llm_observation=llm_observation,
+                        provider=selected_model_config.provider,
+                        model=selected_model_config.model,
+                        latency_ms=self._elapsed_ms(llm_timer),
+                        input_tokens=None,
+                        output_tokens=None,
+                        total_tokens=None,
+                        error_message=self._safe_trace_error_message(exc),
+                    )
+                    raise
                 llm_latency_ms = llm_response.latency_ms or self._elapsed_ms(llm_timer)
+                self._complete_observability_llm_call(
+                    observability_trace,
+                    llm_observation=llm_observation,
+                    provider=llm_response.model_provider,
+                    model=llm_response.model_name,
+                    latency_ms=llm_latency_ms,
+                    input_tokens=llm_response.token_usage.input_tokens,
+                    output_tokens=llm_response.token_usage.output_tokens,
+                    total_tokens=llm_response.token_usage.total_tokens,
+                )
                 self._record_trace_step(
                     trace_id=trace_id,
                     step_type=TraceStepType.LLM_CALL_COMPLETED,
@@ -282,6 +338,11 @@ class ChatService:
                 started_at=request_started_at,
                 metadata={"conversation_id": conversation.id},
             )
+            self._fail_observability_trace(
+                observability_trace,
+                exc=exc,
+                started_at=request_started_at,
+            )
             raise ChatPersistenceError() from exc
         except Exception as exc:
             self._fail_trace(
@@ -289,6 +350,11 @@ class ChatService:
                 exc=exc,
                 started_at=request_started_at,
                 metadata={"conversation_id": conversation.id},
+            )
+            self._fail_observability_trace(
+                observability_trace,
+                exc=exc,
+                started_at=request_started_at,
             )
             raise
 
@@ -313,6 +379,13 @@ class ChatService:
             channel=channel,
             message_metadata=message_metadata,
         )
+        self._complete_observability_trace(
+            observability_trace,
+            llm_response=llm_response,
+            latency_ms=total_latency_ms,
+            conversation_id=conversation.id,
+        )
+        self._flush_observability_tracer()
 
         return ChatReply(
             conversation_id=conversation.id,
@@ -432,7 +505,7 @@ class ChatService:
         message: str,
         *,
         trace_id: str | None,
-    ) -> list[RetrievedChunk]:
+    ) -> tuple[list[RetrievedChunk], int]:
         started_at = self._utcnow()
         retrieval_timer = perf_counter()
         self._record_trace_step(
@@ -448,6 +521,7 @@ class ChatService:
             started_at=started_at,
         )
         retrieved_chunks = self._retrieve_chunks(message)
+        latency_ms = self._elapsed_ms(retrieval_timer)
         self._record_trace_step(
             trace_id=trace_id,
             step_type=TraceStepType.RETRIEVAL_COMPLETED,
@@ -467,11 +541,11 @@ class ChatService:
                     for item in retrieved_chunks
                 ]
             },
-            latency_ms=self._elapsed_ms(retrieval_timer),
+            latency_ms=latency_ms,
             started_at=started_at,
             completed_at=self._utcnow(),
         )
-        return retrieved_chunks
+        return retrieved_chunks, latency_ms
 
     def _retrieve_broad_project_chunks(self, message: str) -> list[RetrievedChunk]:
         if not is_broad_project_query(message):
@@ -744,7 +818,7 @@ class ChatService:
     ) -> dict[str, object]:
         metadata = {
             "channel": channel,
-            "route": "/api/tavus/tools/ask-tumelo" if channel == "tavus_video" else "/chat",
+            "route": self._get_endpoint(channel),
         }
         metadata.update(message_metadata)
         return metadata
@@ -792,3 +866,177 @@ class ChatService:
 
     def _utcnow(self) -> datetime:
         return datetime.now(UTC)
+
+    def _start_observability_trace(
+        self,
+        *,
+        conversation_id: str,
+        message: str,
+        channel: str,
+        message_metadata: dict[str, object],
+        model_config_id: str,
+    ) -> ObservabilityTrace:
+        try:
+            return self.observability_tracer.start_chat_request(
+                question=message,
+                conversation_id=conversation_id,
+                session_id=(
+                    self._extract_optional_string(message_metadata, "session_id")
+                    or conversation_id
+                ),
+                user_id=self._extract_optional_string(message_metadata, "user_id"),
+                endpoint=self._get_endpoint(channel),
+                endpoint_name=self._get_endpoint_name(channel),
+                channel=channel,
+                llm_provider=self._extract_model_provider(model_config_id),
+                llm_model=self._extract_model_name(model_config_id),
+            )
+        except Exception:
+            logger.warning("Observability trace start failed.", exc_info=True)
+            return ObservabilityTrace()
+
+    def _start_observability_retrieval(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        message: str,
+    ):
+        try:
+            return self.observability_tracer.start_retrieval(
+                observability_trace,
+                original_query=message,
+                rewritten_query=None,
+                retriever_type=self.settings.retriever_type,
+                top_k=self.retrieval_top_k,
+                embedding_provider=self.settings.embedding_provider,
+                embedding_model=self.settings.knowledge_embedding_model,
+                vector_store=self._get_vector_store_name(),
+            )
+        except Exception:
+            logger.warning("Observability retrieval trace start failed.", exc_info=True)
+            return None
+
+    def _complete_observability_retrieval(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        retrieval_observation,
+        retrieved_chunks: list[RetrievedChunk],
+        latency_ms: int,
+    ) -> None:
+        try:
+            self.observability_tracer.complete_retrieval(
+                observability_trace,
+                observation=retrieval_observation,
+                retrieved_chunks=retrieved_chunks,
+                latency_ms=latency_ms,
+            )
+        except Exception:
+            logger.warning("Observability retrieval trace completion failed.", exc_info=True)
+
+    def _start_observability_llm_call(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        provider: str | None,
+        model: str | None,
+    ):
+        try:
+            return self.observability_tracer.start_llm_call(
+                observability_trace,
+                provider=provider,
+                model=model,
+                temperature=None,
+                max_tokens=None,
+            )
+        except Exception:
+            logger.warning("Observability LLM trace start failed.", exc_info=True)
+            return None
+
+    def _complete_observability_llm_call(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        llm_observation,
+        provider: str | None,
+        model: str | None,
+        latency_ms: int | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+        error_message: str | None = None,
+    ) -> None:
+        try:
+            self.observability_tracer.complete_llm_call(
+                observability_trace,
+                observation=llm_observation,
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                error_message=error_message,
+            )
+        except Exception:
+            logger.warning("Observability LLM trace completion failed.", exc_info=True)
+
+    def _complete_observability_trace(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        llm_response: LLMGeneratedResponse,
+        latency_ms: int,
+        conversation_id: str,
+    ) -> None:
+        try:
+            self.observability_tracer.complete_chat_request(
+                observability_trace,
+                final_answer=llm_response.message,
+                conversation_id=conversation_id,
+                latency_ms=latency_ms,
+                llm_provider=llm_response.model_provider,
+                llm_model=llm_response.model_name,
+                input_tokens=llm_response.token_usage.input_tokens,
+                output_tokens=llm_response.token_usage.output_tokens,
+                total_tokens=llm_response.token_usage.total_tokens,
+            )
+        except Exception:
+            logger.warning("Observability trace completion failed.", exc_info=True)
+
+    def _fail_observability_trace(
+        self,
+        observability_trace: ObservabilityTrace,
+        *,
+        exc: Exception,
+        started_at: float,
+    ) -> None:
+        try:
+            self.observability_tracer.capture_error(
+                observability_trace,
+                error_message=self._safe_trace_error_message(exc),
+                latency_ms=self._elapsed_ms(started_at),
+            )
+        except Exception:
+            logger.warning("Observability trace failure capture failed.", exc_info=True)
+        finally:
+            self._flush_observability_tracer()
+
+    def _flush_observability_tracer(self) -> None:
+        try:
+            self.observability_tracer.flush()
+        except Exception:
+            logger.warning("Observability tracer flush failed.", exc_info=True)
+
+    def _get_vector_store_name(self) -> str | None:
+        value = getattr(self.retrieval_service, "vector_store_name", None)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _get_endpoint(self, channel: str) -> str:
+        return OBSERVABILITY_ENDPOINT_BY_CHANNEL.get(channel, "/chat")
+
+    def _get_endpoint_name(self, channel: str) -> str:
+        return "ask_tumelo_tool" if channel == "tavus_video" else "chat"

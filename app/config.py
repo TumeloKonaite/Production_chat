@@ -70,6 +70,13 @@ class Settings:
     reranker_model: str = "openai:gpt-4.1-mini"
     reranker_initial_top_k: int = 20
     reranker_final_top_k: int = 5
+    enable_langfuse_observability: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_environment: str = "local"
+    langfuse_release: str | None = None
+    langfuse_sample_rate: float = 1.0
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -273,6 +280,28 @@ def get_settings() -> Settings:
     if knowledge_chunk_overlap >= knowledge_chunk_size:
         raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
 
+    enable_langfuse_observability = _parse_bool(
+        os.getenv("ENABLE_LANGFUSE_OBSERVABILITY"),
+        default=False,
+    )
+    langfuse_public_key = _get_non_empty_env("LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key = _get_non_empty_env("LANGFUSE_SECRET_KEY")
+    if enable_langfuse_observability and langfuse_public_key is None:
+        raise ValueError(
+            "LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true."
+        )
+    if enable_langfuse_observability and langfuse_secret_key is None:
+        raise ValueError(
+            "LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true."
+        )
+    langfuse_sample_rate = _get_float_env(
+        "LANGFUSE_SAMPLE_RATE",
+        1.0,
+        minimum=0.0,
+    )
+    if langfuse_sample_rate > 1.0:
+        raise ValueError("LANGFUSE_SAMPLE_RATE must be less than or equal to 1.0.")
+
     return Settings(
         database_url=os.getenv(
             "DATABASE_URL",
@@ -386,4 +415,16 @@ def get_settings() -> Settings:
             5,
             minimum=1,
         ),
+        enable_langfuse_observability=enable_langfuse_observability,
+        langfuse_public_key=langfuse_public_key,
+        langfuse_secret_key=langfuse_secret_key,
+        langfuse_base_url=(
+            _get_non_empty_env("LANGFUSE_BASE_URL", default="https://cloud.langfuse.com")
+            or "https://cloud.langfuse.com"
+        ).rstrip("/"),
+        langfuse_environment=(
+            _get_non_empty_env("LANGFUSE_ENVIRONMENT", default="local") or "local"
+        ),
+        langfuse_release=_get_non_empty_env("LANGFUSE_RELEASE"),
+        langfuse_sample_rate=langfuse_sample_rate,
     )
