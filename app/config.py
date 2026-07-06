@@ -77,6 +77,7 @@ class Settings:
     langfuse_environment: str = "local"
     langfuse_release: str | None = None
     langfuse_sample_rate: float = 1.0
+    langfuse_export_default_limit: int = 100
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -301,6 +302,11 @@ def get_settings() -> Settings:
     )
     if langfuse_sample_rate > 1.0:
         raise ValueError("LANGFUSE_SAMPLE_RATE must be less than or equal to 1.0.")
+    langfuse_export_default_limit = _get_int_env(
+        "LANGFUSE_EXPORT_DEFAULT_LIMIT",
+        100,
+        minimum=1,
+    )
 
     return Settings(
         database_url=os.getenv(
@@ -427,4 +433,5 @@ def get_settings() -> Settings:
         ),
         langfuse_release=_get_non_empty_env("LANGFUSE_RELEASE"),
         langfuse_sample_rate=langfuse_sample_rate,
+        langfuse_export_default_limit=langfuse_export_default_limit,
     )

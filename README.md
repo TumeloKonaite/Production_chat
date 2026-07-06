@@ -127,6 +127,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_ENVIRONMENT=local
 LANGFUSE_RELEASE=
 LANGFUSE_SAMPLE_RATE=1.0
+LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 EMBEDDING_PROVIDER=hf
 KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
 EMBEDDING_DIMENSION=384
@@ -535,6 +536,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_ENVIRONMENT=local
 LANGFUSE_RELEASE=modal-v1
 LANGFUSE_SAMPLE_RATE=1.0
+LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 ```
 
 - When `ENABLE_LANGFUSE_OBSERVABILITY=false`, the backend starts normally without Langfuse credentials.
@@ -542,6 +544,26 @@ LANGFUSE_SAMPLE_RATE=1.0
 - Retrieval traces log source names, chunk IDs, scores, and short content previews only; full retrieved documents are not sent by default.
 - The chat flow performs a best-effort `flush()` after each request for short-lived deployments such as Modal.
 - Keep MLflow and DagsHub enabled separately for experiment runs, metrics, and eval comparisons.
+
+### Exporting bad Langfuse traces into eval review queues
+
+When production traces reveal weak answers, errors, slow responses, or negative feedback, export them into a JSONL review queue with:
+
+```bash
+python -m evals.export_bad_langfuse_traces \
+  --output evals/datasets/production_failures_review.jsonl \
+  --score-name answer_quality \
+  --max-score 0.6 \
+  --from-date 2026-07-01 \
+  --to-date 2026-07-06 \
+  --limit 100
+```
+
+Use `--only-errors` for failed traces, `--detect-fallback-answer` for refusal-style answers, and `--append` to merge new rows without duplicating trace IDs.
+
+The exporter writes a review dataset with empty expected fields by default so maintainers can inspect the production failure, fill `expected_facts`, `expected_answer_points`, and `expected_source_documents`, then promote the row into a scored eval dataset intentionally.
+
+Detailed workflow notes live in `docs/evals/langfuse_trace_export.md`.
 
 ### Local-only MLflow tracking
 

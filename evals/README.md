@@ -203,6 +203,24 @@ Do not copy the same question into multiple datasets. If a new question could
 fit more than one dataset, choose the one whose scoring contract best matches
 the maintenance goal.
 
+## Langfuse review queue exports
+
+`python -m evals.export_bad_langfuse_traces` exports failed or low-quality
+production traces into a separate JSONL review queue. This is intentionally not
+the canonical benchmark and does not weaken the source-coverage or
+answer-points rules above.
+
+The export rows include:
+
+- `expected_facts: []`
+- `expected_answer_points: []`
+- `expected_source_documents: []`
+- Langfuse metadata for trace back-reference
+
+That keeps the exported file lightweight and safe to review first. Once a row
+has a confirmed ground truth, copy or adapt it into the appropriate scored
+dataset rather than editing the canonical benchmark casually.
+
 ## Retrieval Embedding Matrix
 
 Use `scripts/run_embedding_experiment.py` to compare retrieval quality across
