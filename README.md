@@ -550,7 +550,7 @@ LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 When production traces reveal weak answers, errors, slow responses, or negative feedback, export them into a JSONL review queue with:
 
 ```bash
-python -m evals.export_bad_langfuse_traces \
+python -m evals.langfuse.export_bad_langfuse_traces \
   --output evals/datasets/production_failures_review.jsonl \
   --score-name answer_quality \
   --max-score 0.6 \
@@ -576,8 +576,8 @@ MLFLOW_TRACKING_URI=
 MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
 ```
 
-When `MLFLOW_TRACKING_URI` is blank, MLflow uses the local file-backed store and writes run metadata under `mlruns/` and artifacts under `mlartifacts/`.
-Those directories are local-only outputs and are gitignored.
+When `MLFLOW_TRACKING_URI` is blank and DagsHub is disabled, MLflow falls back to a local file-backed store.
+That local mode is optional and legacy for this repo. If you use it, MLflow will recreate local runtime output directories as needed.
 
 If you prefer a local MLflow server and UI instead of the default file-backed store, start one first:
 
@@ -611,14 +611,15 @@ Authentication can be provided either with `DAGSHUB_TOKEN` in `.env` or with a p
 
 ### Running eval workflows
 
-When `ENABLE_MLFLOW_TRACKING=true`, the eval runners reuse the shared MLflow/DagsHub tracker in `app/infrastructure/tracking/` and log local artifacts plus remote run metadata through the same path.
+When `ENABLE_MLFLOW_TRACKING=true`, the eval runners reuse the shared MLflow/DagsHub tracker in `app/infrastructure/tracking/`.
+With DagsHub enabled, run metadata is logged to the remote backend while eval result files remain available under `evals/results/`.
 
 Workflows that log to MLflow/DagsHub when tracking is enabled:
 
-- `evals/run_generation_eval.py`
-- `evals/run_rag_eval.py`
-- `evals/run_retrieval_eval.py`
-- `evals/run_retrieval_sweep.py`
+- `evals/runners/run_generation_eval.py`
+- `evals/runners/run_rag_eval.py`
+- `evals/runners/run_retrieval_eval.py`
+- `evals/runners/run_retrieval_sweep.py`
 - `scripts/run_chunking_experiment.py`
 - `scripts/run_embedding_experiment.py`
 
@@ -655,7 +656,7 @@ Use local artifacts for quick inspection under `evals/results/`, and use MLflow 
 The model comparison workflow:
 
 ```bash
-python evals/run_model_eval.py \
+python -m evals.runners.run_model_eval \
   --models openai:gpt-4.1-mini openai:gpt-4.1 \
   --prompt-version v1_professional \
   --dataset evals/datasets/model_eval_dataset.jsonl \
@@ -665,7 +666,7 @@ python evals/run_model_eval.py \
 The fixed-context generation comparison workflow:
 
 ```bash
-uv run python evals/run_generation_eval.py \
+uv run python -m evals.runners.run_generation_eval \
   --dataset evals/datasets/generation_eval_dataset.jsonl \
   --prompt-version v1_professional
 ```
@@ -676,7 +677,7 @@ OpenAI example:
 LLM_PROVIDER=openai \
 LLM_MODEL=gpt-4.1-mini \
 LLM_BASE_URL=https://api.openai.com/v1 \
-uv run python evals/run_generation_eval.py --prompt-version v1_professional
+uv run python -m evals.runners.run_generation_eval --prompt-version v1_professional
 ```
 
 OpenRouter example:
@@ -687,7 +688,7 @@ LLM_MODEL=anthropic/claude-3.5-sonnet \
 LLM_BASE_URL=https://openrouter.ai/api/v1 \
 LLM_PROMPT_COST_PER_1M_TOKENS=3.0 \
 LLM_COMPLETION_COST_PER_1M_TOKENS=15.0 \
-uv run python evals/run_generation_eval.py --prompt-version v1_professional
+uv run python -m evals.runners.run_generation_eval --prompt-version v1_professional
 ```
 
 This runner keeps retrieval fixed by loading context directly from the dataset, then logs:
@@ -700,12 +701,12 @@ This runner keeps retrieval fixed by loading context directly from the dataset, 
 - prompt, completion, and total token counts where available
 - estimated prompt, completion, and total cost where configured
 
-When the active generation model uses `provider: "openrouter"` and the selected model config does not already include token pricing, `evals/run_generation_eval.py` now looks up the model automatically with OpenRouter's single-model endpoint and uses `data.pricing.prompt` and `data.pricing.completion` to estimate cost. Those API values are documented by OpenRouter as USD per token and are converted to USD per 1M tokens inside the runner.
+When the active generation model uses `provider: "openrouter"` and the selected model config does not already include token pricing, `evals/runners/run_generation_eval.py` now looks up the model automatically with OpenRouter's single-model endpoint and uses `data.pricing.prompt` and `data.pricing.completion` to estimate cost. Those API values are documented by OpenRouter as USD per token and are converted to USD per 1M tokens inside the runner.
 
 The RAG evaluation workflow:
 
 ```bash
-python evals/run_rag_eval.py \
+python -m evals.runners.run_rag_eval \
   --model openai:gpt-4.1-mini \
   --prompt-version v1_professional \
   --run-name portfolio-rag-eval
@@ -718,19 +719,19 @@ The canonical RAG benchmark contract is documented in `evals/README.md`.
 The retrieval-only baseline workflow:
 
 ```bash
-uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_baseline.json
+uv run python -m evals.runners.run_retrieval_eval --config evals/configs/retrieval_baseline.json
 ```
 
 The reranked retrieval workflow:
 
 ```bash
-uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_reranked_llm.json
+uv run python -m evals.runners.run_retrieval_eval --config evals/configs/retrieval_reranked_llm.json
 ```
 
 The same runner still supports direct flag overrides when needed:
 
 ```bash
-python evals/run_retrieval_eval.py --k 5 --enable-reranker --reranker-type llm --reranker-initial-top-k 20
+python -m evals.runners.run_retrieval_eval --k 5 --enable-reranker --reranker-type llm --reranker-initial-top-k 20
 ```
 
 The retrieval artifact payload includes reranker config, before/after chunk order, context relevance, embedding config, and chunking config used for that run.
@@ -738,7 +739,7 @@ The retrieval artifact payload includes reranker config, before/after chunk orde
 To compare multiple retrieval configurations in one command, use the sweep runner with a YAML config:
 
 ```bash
-python evals/run_retrieval_sweep.py --config evals/configs/retrieval_sweep.yaml
+python -m evals.runners.run_retrieval_sweep --config evals/configs/retrieval_sweep.yaml
 ```
 
 The protected backend exposes the same batch pattern over HTTP:

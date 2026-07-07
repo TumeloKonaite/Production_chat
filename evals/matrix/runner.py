@@ -17,19 +17,24 @@ from evals.matrix.models import (
     ResolvedSuitePlan,
 )
 from evals.matrix.ranking import rank_mode_rows
-from evals.retrieval_eval_runner import DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE, RetrievalEvalRunResult
-from evals.run_generation_eval import (
+from evals.runners.retrieval_eval_runner import (
+    DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
+    RetrievalEvalRunResult,
+)
+from evals.runners.run_generation_eval import (
     DEFAULT_DATASET_PATH as DEFAULT_GENERATION_DATASET_PATH,
     GenerationEvalRunResult,
     run_generation_eval,
 )
-from evals.run_rag_eval import (
+from evals.runners.run_rag_eval import (
     DEFAULT_DATASET_PATH as DEFAULT_RAG_DATASET_PATH,
     DEFAULT_JUDGE_PROMPT_PATH,
     RagEvalRunResult,
     run_rag_eval,
 )
-from evals.run_retrieval_eval import DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH
+from evals.runners.run_retrieval_eval import (
+    DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH,
+)
 
 DEFAULT_EXPERIMENT_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "evals" / "outputs" / "experiments"
 
@@ -266,7 +271,9 @@ def _run_retrieval_suite_item(
 ) -> RetrievalEvalRunResult:
     runner = retrieval_runner
     if runner is None:
-        from evals.retrieval_eval_runner import run_retrieval_eval as default_retrieval_runner
+        from evals.runners.retrieval_eval_runner import (
+            run_retrieval_eval as default_retrieval_runner,
+        )
 
         runner = default_retrieval_runner
 

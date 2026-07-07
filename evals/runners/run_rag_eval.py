@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -21,7 +21,7 @@ from app.repositories.db.session import get_session_factory
 from app.services.evals.rag_eval_service import RagEvalService
 from app.services.llm import LLMService
 from app.services.retrieval import RetrievalService
-from evals.query_rewriter import QueryRewriter
+from evals.runners.query_rewriter import QueryRewriter
 
 DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "portfolio_eval_dataset.jsonl"
 DEFAULT_JUDGE_PROMPT_PATH = ROOT_DIR / "evals" / "prompts" / "judge_prompt_v1.md"

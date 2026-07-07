@@ -10,18 +10,20 @@ from app.config import Settings
 from app.infrastructure.tracking import create_experiment_tracker
 from app.services.evals.eval_run_service import EvalRunService
 from evals.matrix import expand_suite_plan, load_experiment_matrix_config, run_experiment_matrix
-from evals.retrieval_eval_runner import run_retrieval_eval
-from evals.run_experiment_matrix import DEFAULT_CONFIG_PATH
-from evals.run_generation_eval import (
+from evals.runners.retrieval_eval_runner import run_retrieval_eval
+from evals.runners.run_experiment_matrix import DEFAULT_CONFIG_PATH
+from evals.runners.run_generation_eval import (
     DEFAULT_DATASET_PATH as DEFAULT_GENERATION_DATASET_PATH,
     run_generation_eval,
 )
-from evals.run_rag_eval import (
+from evals.runners.run_rag_eval import (
     DEFAULT_DATASET_PATH as DEFAULT_RAG_DATASET_PATH,
     DEFAULT_JUDGE_PROMPT_PATH,
     run_rag_eval,
 )
-from evals.run_retrieval_eval import DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH
+from evals.runners.run_retrieval_eval import (
+    DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH,
+)
 
 
 class EvalJobRunner:

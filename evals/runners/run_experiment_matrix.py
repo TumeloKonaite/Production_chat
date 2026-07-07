@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -16,13 +16,17 @@ from evals.matrix import (
     load_experiment_matrix_config,
     run_experiment_matrix,
 )
-from evals.retrieval_eval_runner import DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE
-from evals.run_generation_eval import DEFAULT_DATASET_PATH as DEFAULT_GENERATION_DATASET_PATH
-from evals.run_rag_eval import (
+from evals.runners.retrieval_eval_runner import DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE
+from evals.runners.run_generation_eval import (
+    DEFAULT_DATASET_PATH as DEFAULT_GENERATION_DATASET_PATH,
+)
+from evals.runners.run_rag_eval import (
     DEFAULT_DATASET_PATH as DEFAULT_RAG_DATASET_PATH,
     DEFAULT_JUDGE_PROMPT_PATH,
 )
-from evals.run_retrieval_eval import DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH
+from evals.runners.run_retrieval_eval import (
+    DEFAULT_DATASET_PATH as DEFAULT_RETRIEVAL_DATASET_PATH,
+)
 
 DEFAULT_CONFIG_PATH = ROOT_DIR / "evals" / "configs" / "experiment_matrix.yaml"
 

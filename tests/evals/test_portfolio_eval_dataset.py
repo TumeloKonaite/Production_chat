@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.domain.evals import RagEvalDatasetExample
 from app.services.evals.rag_eval_service import RagEvalService
-from evals.run_retrieval_eval import validate_dataset_examples
+from evals.runners.run_retrieval_eval import validate_dataset_examples
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "portfolio_eval_dataset.jsonl"

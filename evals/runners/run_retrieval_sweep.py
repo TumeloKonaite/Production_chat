@@ -10,13 +10,13 @@ import re
 import sys
 from typing import Any
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import SUPPORTED_RETRIEVER_TYPES, Settings, get_settings
 from app.infrastructure.tracking import create_experiment_tracker
-from evals.retrieval_eval_runner import (
+from evals.runners.retrieval_eval_runner import (
     DEFAULT_DATASET_PATH,
     DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
     RetrievalEvalRunResult,

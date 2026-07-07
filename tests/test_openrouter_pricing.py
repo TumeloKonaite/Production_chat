@@ -6,7 +6,7 @@ import json
 import httpx
 
 from app.infrastructure.llm import fetch_openrouter_model_pricing
-from evals.run_generation_eval import _merge_model_cost_override
+from evals.runners.run_generation_eval import _merge_model_cost_override
 
 
 def test_fetch_openrouter_model_pricing_converts_per_token_to_per_million() -> None:

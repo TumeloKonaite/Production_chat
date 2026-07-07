@@ -4,12 +4,12 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import get_settings
-from evals.langfuse_trace_exporter import (
+from evals.langfuse.langfuse_trace_exporter import (
     DEFAULT_EXPORT_CATEGORY,
     DEFAULT_FALLBACK_SUBSTRINGS,
     LangfuseExportFilters,

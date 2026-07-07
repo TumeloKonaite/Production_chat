@@ -26,7 +26,7 @@ from app.services.chat.prompting import (
 )
 from app.services.llm import LLMChatMessage, LLMService
 from app.services.retrieval import RetrievedChunk, RetrievalService
-from evals.query_rewriter import QueryRewriter
+from evals.runners.query_rewriter import QueryRewriter
 
 
 class RagEvalService:

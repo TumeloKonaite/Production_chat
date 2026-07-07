@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -23,6 +23,11 @@ from app.infrastructure.tracking import create_experiment_tracker
 from app.services.evals.generation_eval_service import GenerationEvalService
 from app.services.llm import LLMConfigurationError, LLMServiceError
 from app.services.llm import LLMService
+from evals.feedback.feedback_dataset import (
+    build_feedback_tracking_params,
+    summarize_feedback_dataset,
+    write_feedback_metadata_artifacts,
+)
 
 DEFAULT_DATASET_PATH = ROOT_DIR / "evals" / "datasets" / "generation_eval_dataset.jsonl"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "evals" / "results"
@@ -199,6 +204,19 @@ async def run_generation_eval(
     summary_path = output_dir / f"{resolved_run_name}.txt"
     summary_path.write_text(summary_text, encoding="utf-8")
     config_path = output_dir / f"{resolved_run_name}_config.json"
+    feedback_dataset_summary = summarize_feedback_dataset(dataset_path)
+    feedback_tracking_params: dict[str, object] | None = None
+    extra_artifact_paths: dict[str, Path] = {}
+    if feedback_dataset_summary is not None:
+        feedback_tracking_params = build_feedback_tracking_params(feedback_dataset_summary)
+        feedback_tracking_params["feedback_avg_judge_score_available"] = bool(
+            aggregate.feedback_metrics
+            and "feedback_avg_judge_score" in aggregate.feedback_metrics
+        )
+        extra_artifact_paths = write_feedback_metadata_artifacts(
+            output_dir=output_dir,
+            summary=feedback_dataset_summary,
+        )
     config_path.write_text(
         json.dumps(
             {
@@ -209,6 +227,8 @@ async def run_generation_eval(
                 "judge_model_config_id": judge_model_config_id,
                 "temperature": temperature,
                 "python_command_used": " ".join(argv or []),
+                "feedback_tracking_params": feedback_tracking_params,
+                "feedback_metrics": aggregate.feedback_metrics,
             },
             indent=2,
             ensure_ascii=True,
@@ -219,25 +239,28 @@ async def run_generation_eval(
 
     if experiment_tracker.enabled:
         with experiment_tracker.run(resolved_run_name):
-            experiment_tracker.log_params(
-                {
-                    "dataset_path": str(dataset_path),
-                    "dataset_version": dataset_version,
-                    "prompt_version": resolved_prompt_version,
-                    "query_rewriting": False,
-                    "reranker": "none",
-                    "llm_provider": aggregate.model_provider,
-                    "llm_model": aggregate.model_name,
-                    "llm_base_url": aggregate.model_base_url,
-                    "model_config_id": aggregate.model_config_id,
-                    "judge_model_config_id": judge_model_config_id,
-                    "temperature": temperature,
-                    "retrieval_mode": "fixed_context",
-                    "retriever_type": "fixed_context",
-                }
-            )
+            params = {
+                "dataset_path": str(dataset_path),
+                "dataset_version": dataset_version,
+                "prompt_version": resolved_prompt_version,
+                "query_rewriting": False,
+                "reranker": "none",
+                "llm_provider": aggregate.model_provider,
+                "llm_model": aggregate.model_name,
+                "llm_base_url": aggregate.model_base_url,
+                "model_config_id": aggregate.model_config_id,
+                "judge_model_config_id": judge_model_config_id,
+                "temperature": temperature,
+                "retrieval_mode": "fixed_context",
+                "retriever_type": "fixed_context",
+            }
+            if feedback_tracking_params is not None:
+                params.update(feedback_tracking_params)
+            experiment_tracker.log_params(params)
             metrics: dict[str, float | int] = {
                 "total_examples": aggregate.total_examples,
+                "scored_examples": aggregate.scored_examples,
+                "skipped_examples": aggregate.skipped_examples,
                 "passed_examples": aggregate.passed_examples,
                 "failed_examples": aggregate.failed_examples,
                 "pass_rate": aggregate.pass_rate,
@@ -270,10 +293,14 @@ async def run_generation_eval(
                 metrics["average_cost_per_response_usd"] = (
                     aggregate.average_cost_per_response_usd or 0.0
                 )
+            if aggregate.feedback_metrics is not None:
+                metrics.update(aggregate.feedback_metrics)
             experiment_tracker.log_metrics(metrics)
             experiment_tracker.log_artifact(result_path)
             experiment_tracker.log_artifact(summary_path)
             experiment_tracker.log_artifact(config_path)
+            for artifact_path in extra_artifact_paths.values():
+                experiment_tracker.log_artifact(artifact_path)
 
     return GenerationEvalRunResult(
         run_name=resolved_run_name,
@@ -290,6 +317,7 @@ async def run_generation_eval(
             "results_json": result_path,
             "summary_txt": summary_path,
             "config_json": config_path,
+            **extra_artifact_paths,
         },
         pricing_lookup_note=pricing_lookup_note,
     )

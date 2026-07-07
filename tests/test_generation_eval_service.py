@@ -7,6 +7,7 @@ from app.domain.evals import JudgeEvaluation, JudgeMetricScore
 from app.infrastructure.prompts import PromptLoader
 from app.services.evals.generation_eval_service import GenerationEvalService
 from app.services.llm import LLMGeneratedResponse, ModelConfig, TokenUsage
+from evals.feedback.feedback_dataset import FEEDBACK_DATASET_SOURCE
 
 
 class FakeLLMService:
@@ -118,3 +119,58 @@ def test_generation_eval_service_uses_fixed_context_dataset(tmp_path) -> None:
     assert run.aggregate.total_tokens == 720
     assert run.aggregate.estimated_total_cost_usd == 0.0036
     assert run.aggregate.average_context_relevance == 2.0
+
+
+def test_generation_eval_service_handles_feedback_dataset_with_judge_scoring(tmp_path) -> None:
+    dataset_path = tmp_path / "feedback_generation_eval.jsonl"
+    dataset_path.write_text(
+        "\n".join(
+            [
+                (
+                    '{"id":"feedback_trace_001","question":"What does Tumelo do?",'
+                    '"actual_answer":"Tumelo is mainly a frontend developer.",'
+                    '"expected_facts":[],"expected_answer_points":[],"expected_source_documents":["profile.md"],'
+                    '"feedback_rating":"negative","feedback_reason":"incorrect_answer",'
+                    '"feedback_comment":"The original answer missed the backend API work.",'
+                    f'"source":"{FEEDBACK_DATASET_SOURCE}","trace_id":"trace-001","created_at":"2026-07-06T20:00:00Z",'
+                    '"context":[{"source":"profile.md","section":"Summary","content":"Tumelo is a data scientist and software engineer focused on practical AI systems and backend APIs."}]}'
+                )
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    prompt_loader = PromptLoader(
+        prompts_dir=Path("app") / "infrastructure" / "prompts" / "templates"
+    )
+    service = GenerationEvalService(
+        prompt_loader=prompt_loader,
+        llm_service=FakeLLMService(),
+        judge_client=FakeJudgeClient(),
+    )
+
+    examples = service.load_dataset(dataset_path)
+    run = asyncio.run(
+        service.evaluate_dataset(
+            examples=examples,
+            prompt_version="v1_professional",
+            judge_model_config_id="openai:gpt-4.1-mini",
+        )
+    )
+
+    assert examples[0].dataset_source == FEEDBACK_DATASET_SOURCE
+    assert run.records[0].dataset_source == FEEDBACK_DATASET_SOURCE
+    assert run.records[0].requires_human_label is True
+    assert run.records[0].skipped_missing_labels is False
+    assert run.records[0].scored is True
+    assert run.records[0].judge_score == 2.0
+    assert run.aggregate.scored_examples == 1
+    assert run.aggregate.skipped_examples == 0
+    assert run.aggregate.feedback_metrics == {
+        "feedback_cases_total": 1,
+        "feedback_cases_answered": 1,
+        "feedback_cases_skipped_missing_labels": 0,
+        "feedback_pass_rate": 1.0,
+        "feedback_regression_failures": 0,
+        "feedback_avg_judge_score": 2.0,
+    }

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from typing import Any
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -19,7 +19,7 @@ from app.config import Settings
 from app.infrastructure.llm import JudgeClient
 from app.services.chat.prompting import format_retrieved_context
 from app.services.retrieval import RetrievalService
-from evals.query_rewriter import (
+from evals.runners.query_rewriter import (
     QUERY_REWRITE_STATUS_DISABLED,
     QUERY_REWRITE_STATUS_ERROR_FALLBACK,
     QUERY_REWRITE_STATUS_INVALID_RESPONSE_FALLBACK,
@@ -28,6 +28,11 @@ from evals.query_rewriter import (
     QueryRewriter,
     build_disabled_query_rewrite_result,
     get_query_rewrite_prompt_template,
+)
+from evals.feedback.feedback_dataset import (
+    build_feedback_tracking_params,
+    summarize_feedback_dataset,
+    write_feedback_metadata_artifacts,
 )
 from evals.metrics.retrieval_metrics import (
     first_relevant_rank,
@@ -565,78 +570,87 @@ def log_run_to_tracker(
         return None
 
     with tracker.run(run_name) as run:
-        tracker.log_params(
-            {
-                "run_name": run_name,
-                "notes": config.get("notes"),
-                "dataset_name": dataset_path.name,
-                "dataset_path": str(dataset_path),
-                "retriever_type": settings.retriever_type,
-                "retrieval_config": settings.default_retrieval_config,
-                "top_k": top_k,
-                "embedding_provider": settings.embedding_provider,
-                "embedding_model": settings.knowledge_embedding_model,
-                "embedding_dimension": settings.embedding_dimension,
-                "knowledge_collection_name": settings.knowledge_collection_name,
-                "chunk_size": config.get("chunk_size"),
-                "chunk_overlap": config.get("chunk_overlap"),
-                "retrieval_min_similarity": settings.retrieval_min_similarity,
-                "git_commit_sha": config.get("git_commit_sha"),
-                "query_rewriting": config.get("query_rewriting"),
-                "query_rewriting_enabled": config.get("query_rewriting_enabled"),
-                "query_rewrite_model": config.get("query_rewrite_model"),
-                "query_rewrite_temperature": config.get("query_rewrite_temperature"),
-                "query_rewrite_prompt_version": config.get("query_rewrite_prompt_version"),
-                "query_rewrite_timeout_seconds": config.get("query_rewrite_timeout_seconds"),
-                "query_rewrite_max_tokens": config.get("query_rewrite_max_tokens"),
-                "reranker": config.get("reranker"),
-                "reranker_enabled": config.get("reranker_enabled"),
-                "reranker_type": config.get("reranker_type"),
-                "reranker_model": config.get("reranker_model"),
-                "reranker_initial_top_k": config.get("reranker_initial_top_k"),
-                "reranker_final_top_k": config.get("reranker_final_top_k"),
-            }
-        )
-        tracker.log_metrics(
-            {
-                "num_queries_total": summary["num_queries_total"],
-                "num_queries_evaluated": summary["num_queries_evaluated"],
-                "num_queries_without_expected_source": summary[
-                    "num_queries_without_expected_source"
-                ],
-                "num_queries_without_expected_sources": summary[
-                    "num_queries_without_expected_sources"
-                ],
-                "hit_at_k": summary["hit_at_k"],
-                "recall_at_k": summary["recall_at_k"],
-                "precision_at_k": summary.get("precision_at_k", summary.get("mean_precision_at_k")),
-                "mean_precision_at_k": summary["mean_precision_at_k"],
-                "mrr": summary["mrr"],
-                "query_rewrite_total_latency_ms": summary.get("query_rewrite_total_latency_ms", 0),
-                "query_rewrite_avg_latency_ms": summary.get("query_rewrite_avg_latency_ms", 0.0),
-                "query_rewrite_success_count": summary.get("query_rewrite_success_count", 0),
-                "query_rewrite_fallback_count": summary.get("query_rewrite_fallback_count", 0),
-                "query_rewrite_failure_count": summary.get("query_rewrite_failure_count", 0),
-                "query_rewrite_total_prompt_tokens": summary.get(
-                    "query_rewrite_total_prompt_tokens",
-                    0,
-                ),
-                "query_rewrite_total_completion_tokens": summary.get(
-                    "query_rewrite_total_completion_tokens",
-                    0,
-                ),
-                "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens", 0),
-                "query_rewrite_estimated_total_cost": summary.get(
-                    "query_rewrite_estimated_total_cost",
-                    0.0,
-                ),
-                "context_relevance": (
-                    summary["context_relevance"]
-                    if summary.get("context_relevance") is not None
-                    else 0.0
-                ),
-            }
-        )
+        params = {
+            "run_name": run_name,
+            "notes": config.get("notes"),
+            "dataset_name": dataset_path.name,
+            "dataset_path": str(dataset_path),
+            "retriever_type": settings.retriever_type,
+            "retrieval_config": settings.default_retrieval_config,
+            "top_k": top_k,
+            "embedding_provider": settings.embedding_provider,
+            "embedding_model": settings.knowledge_embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
+            "knowledge_collection_name": settings.knowledge_collection_name,
+            "chunk_size": config.get("chunk_size"),
+            "chunk_overlap": config.get("chunk_overlap"),
+            "retrieval_min_similarity": settings.retrieval_min_similarity,
+            "git_commit_sha": config.get("git_commit_sha"),
+            "query_rewriting": config.get("query_rewriting"),
+            "query_rewriting_enabled": config.get("query_rewriting_enabled"),
+            "query_rewrite_model": config.get("query_rewrite_model"),
+            "query_rewrite_temperature": config.get("query_rewrite_temperature"),
+            "query_rewrite_prompt_version": config.get("query_rewrite_prompt_version"),
+            "query_rewrite_timeout_seconds": config.get("query_rewrite_timeout_seconds"),
+            "query_rewrite_max_tokens": config.get("query_rewrite_max_tokens"),
+            "reranker": config.get("reranker"),
+            "reranker_enabled": config.get("reranker_enabled"),
+            "reranker_type": config.get("reranker_type"),
+            "reranker_model": config.get("reranker_model"),
+            "reranker_initial_top_k": config.get("reranker_initial_top_k"),
+            "reranker_final_top_k": config.get("reranker_final_top_k"),
+        }
+        feedback_tracking_params = config.get("feedback_tracking_params")
+        if isinstance(feedback_tracking_params, dict):
+            params.update(feedback_tracking_params)
+        tracker.log_params(params)
+
+        metrics: dict[str, float | int] = {
+            "num_queries_total": summary["num_queries_total"],
+            "num_queries_evaluated": summary["num_queries_evaluated"],
+            "num_queries_without_expected_source": summary[
+                "num_queries_without_expected_source"
+            ],
+            "num_queries_without_expected_sources": summary[
+                "num_queries_without_expected_sources"
+            ],
+            "query_rewrite_total_latency_ms": summary.get("query_rewrite_total_latency_ms", 0),
+            "query_rewrite_avg_latency_ms": summary.get("query_rewrite_avg_latency_ms", 0.0),
+            "query_rewrite_success_count": summary.get("query_rewrite_success_count", 0),
+            "query_rewrite_fallback_count": summary.get("query_rewrite_fallback_count", 0),
+            "query_rewrite_failure_count": summary.get("query_rewrite_failure_count", 0),
+            "query_rewrite_total_prompt_tokens": summary.get(
+                "query_rewrite_total_prompt_tokens",
+                0,
+            ),
+            "query_rewrite_total_completion_tokens": summary.get(
+                "query_rewrite_total_completion_tokens",
+                0,
+            ),
+            "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens", 0),
+            "query_rewrite_estimated_total_cost": summary.get(
+                "query_rewrite_estimated_total_cost",
+                0.0,
+            ),
+            "context_relevance": (
+                summary["context_relevance"]
+                if summary.get("context_relevance") is not None
+                else 0.0
+            ),
+        }
+        for metric_name in ("hit_at_k", "recall_at_k", "mrr"):
+            metric_value = summary.get(metric_name)
+            if metric_value is not None:
+                metrics[metric_name] = metric_value
+        precision_at_k = summary.get("precision_at_k", summary.get("mean_precision_at_k"))
+        if precision_at_k is not None:
+            metrics["precision_at_k"] = precision_at_k
+        if summary.get("mean_precision_at_k") is not None:
+            metrics["mean_precision_at_k"] = summary["mean_precision_at_k"]
+        feedback_metrics = config.get("feedback_metrics")
+        if isinstance(feedback_metrics, dict):
+            metrics.update(feedback_metrics)
+        tracker.log_metrics(metrics)
         for artifact_path in artifact_paths.values():
             tracker.log_artifact(artifact_path)
     return _extract_mlflow_run_id(run)
@@ -699,6 +713,27 @@ def run_retrieval_eval(
         query_rewriter=query_rewriter,
         context_relevance_judge=context_relevance_judge,
     )
+    feedback_dataset_summary = summarize_feedback_dataset(resolved_dataset_path)
+    feedback_tracking_params: dict[str, object] | None = None
+    feedback_metrics: dict[str, float | int] | None = None
+    if feedback_dataset_summary is not None:
+        feedback_tracking_params = build_feedback_tracking_params(feedback_dataset_summary)
+        feedback_tracking_params["feedback_retrieval_hit_rate_available"] = (
+            summary["hit_at_k"] is not None
+        )
+        feedback_metrics = {
+            "feedback_cases_total": summary["num_queries_total"],
+            "feedback_cases_answered": summary["num_queries_total"],
+            "feedback_cases_skipped_missing_labels": summary["num_queries_without_expected_sources"],
+        }
+        if summary["hit_at_k"] is not None:
+            feedback_metrics["feedback_pass_rate"] = summary["hit_at_k"]
+            feedback_metrics["feedback_retrieval_hit_rate"] = summary["hit_at_k"]
+            feedback_metrics["feedback_regression_failures"] = sum(
+                1
+                for result in results
+                if result["has_expected_sources"] and (result.get("hit_at_k") or 0.0) < 1.0
+            )
     config = build_run_config(
         settings=settings,
         dataset_path=resolved_dataset_path,
@@ -710,6 +745,10 @@ def run_retrieval_eval(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
     )
+    if feedback_tracking_params is not None:
+        config["feedback_tracking_params"] = feedback_tracking_params
+    if feedback_metrics is not None:
+        config["feedback_metrics"] = feedback_metrics
 
     run_output_dir = create_output_directory(
         resolved_output_root,
@@ -722,6 +761,13 @@ def run_retrieval_eval(
         results=results,
         config=config,
     )
+    if feedback_dataset_summary is not None:
+        artifact_paths.update(
+            write_feedback_metadata_artifacts(
+                output_dir=run_output_dir,
+                summary=feedback_dataset_summary,
+            )
+        )
     mlflow_run_id = log_run_to_tracker(
         tracker=tracker,
         settings=settings,
