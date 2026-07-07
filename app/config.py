@@ -93,6 +93,13 @@ class Settings:
     response_cache_max_results: int = 3
     response_cache_store_private_sessions: bool = False
     response_cache_knowledge_base_version: str = "default"
+    enable_rate_limiting: bool = False
+    rate_limiting_fail_open: bool = True
+    chat_rate_limit_requests_per_10_minutes: int = 20
+    chat_rate_limit_requests_per_day: int = 100
+    chat_rate_limit_concurrent_requests: int = 3
+    chat_rate_limit_daily_token_budget: int = 100000
+    chat_rate_limit_daily_cost_budget_usd: float = 0.50
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -372,6 +379,39 @@ def get_settings() -> Settings:
         os.getenv("RESPONSE_CACHE_STORE_PRIVATE_SESSIONS"),
         default=False,
     )
+    enable_rate_limiting = _parse_bool(
+        os.getenv("ENABLE_RATE_LIMITING"),
+        default=False,
+    )
+    rate_limiting_fail_open = _parse_bool(
+        os.getenv("RATE_LIMITING_FAIL_OPEN"),
+        default=True,
+    )
+    chat_rate_limit_requests_per_10_minutes = _get_int_env(
+        "CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES",
+        20,
+        minimum=1,
+    )
+    chat_rate_limit_requests_per_day = _get_int_env(
+        "CHAT_RATE_LIMIT_REQUESTS_PER_DAY",
+        100,
+        minimum=1,
+    )
+    chat_rate_limit_concurrent_requests = _get_int_env(
+        "CHAT_RATE_LIMIT_CONCURRENT_REQUESTS",
+        3,
+        minimum=1,
+    )
+    chat_rate_limit_daily_token_budget = _get_int_env(
+        "CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET",
+        100000,
+        minimum=1,
+    )
+    chat_rate_limit_daily_cost_budget_usd = _get_float_env(
+        "CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD",
+        0.50,
+        minimum=0.0,
+    )
 
     return Settings(
         database_url=os.getenv(
@@ -537,4 +577,11 @@ def get_settings() -> Settings:
             )
             or os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base")
         ),
+        enable_rate_limiting=enable_rate_limiting,
+        rate_limiting_fail_open=rate_limiting_fail_open,
+        chat_rate_limit_requests_per_10_minutes=chat_rate_limit_requests_per_10_minutes,
+        chat_rate_limit_requests_per_day=chat_rate_limit_requests_per_day,
+        chat_rate_limit_concurrent_requests=chat_rate_limit_concurrent_requests,
+        chat_rate_limit_daily_token_budget=chat_rate_limit_daily_token_budget,
+        chat_rate_limit_daily_cost_budget_usd=chat_rate_limit_daily_cost_budget_usd,
     )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -76,14 +75,3 @@ class EvalRepository:
             raise EvalRepositoryError() from exc
 
         return run
-
-    def list_runs_by_name(self, run_name: str) -> Sequence[RagEvalRun]:
-        statement = (
-            select(RagEvalRun)
-            .where(RagEvalRun.run_name == run_name)
-            .order_by(RagEvalRun.created_at.desc(), RagEvalRun.id.desc())
-        )
-        try:
-            return list(self._session.scalars(statement))
-        except SQLAlchemyError as exc:
-            raise EvalRepositoryError() from exc

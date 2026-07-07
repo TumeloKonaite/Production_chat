@@ -80,9 +80,6 @@ class ModelRegistry:
             raise UnknownModelError(model_config_id, self.available_model_ids())
         return model_config
 
-    def get_provider(self, model_config_id: str) -> str:
-        return self.get_model(model_config_id).provider
-
     def estimate_cost(
         self,
         model_config_id: str,

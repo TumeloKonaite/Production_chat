@@ -32,15 +32,6 @@ class MatrixRunSpec:
     mode: str
     retrieval_config: dict[str, MatrixScalar]
     generation_config: dict[str, MatrixScalar]
-
-    @property
-    def combined_config(self) -> dict[str, MatrixScalar]:
-        return {
-            **{f"retrieval.{key}": value for key, value in self.retrieval_config.items()},
-            **{f"generation.{key}": value for key, value in self.generation_config.items()},
-        }
-
-
 @dataclass(frozen=True, slots=True)
 class ResolvedSuitePlan:
     suite: ExperimentSuiteConfig
