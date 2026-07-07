@@ -346,6 +346,9 @@ def test_get_settings_uses_configured_app_and_supabase_values(
     assert settings.redis_url is None
     assert settings.mlflow_tracking_username == "mlflow-user"
     assert settings.mlflow_tracking_password == "mlflow-pass"
+    assert settings.migration_database_url == (
+        "postgresql+psycopg://postgres:secret@db-direct.example.com:5432/app"
+    )
 
 
 def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
@@ -359,6 +362,23 @@ def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
 
     assert settings.frontend_origin is None
     assert settings.frontend_origins == []
+
+
+def test_get_settings_uses_runtime_database_url_for_migrations_when_direct_url_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://postgres:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require",
+    )
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+    monkeypatch.delenv("DATABASE_DIRECT_URL", raising=False)
+
+    settings = get_settings()
+
+    assert settings.database_direct_url is None
+    assert settings.migration_database_url == settings.database_url
 
 
 @pytest.mark.parametrize(

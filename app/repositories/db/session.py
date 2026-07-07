@@ -11,23 +11,24 @@ from app.config import get_settings
 
 
 @lru_cache
-def get_engine() -> Engine:
+def get_engine(*, use_direct: bool = False) -> Engine:
     settings = get_settings()
+    database_url = settings.migration_database_url if use_direct else settings.database_url
     connect_args: dict[str, object] = {}
-    if settings.database_url.startswith("sqlite"):
+    if database_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     return create_engine(
-        settings.database_url,
+        database_url,
         connect_args=connect_args,
         future=True,
     )
 
 
 @lru_cache
-def get_session_factory() -> sessionmaker[Session]:
+def get_session_factory(*, use_direct: bool = False) -> sessionmaker[Session]:
     return sessionmaker(
-        bind=get_engine(),
+        bind=get_engine(use_direct=use_direct),
         autocommit=False,
         autoflush=False,
         expire_on_commit=False,

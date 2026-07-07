@@ -101,6 +101,7 @@ POSTGRES_DB=production_chatbot
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
+DATABASE_DIRECT_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1-mini
 LLM_BASE_URL=https://api.openai.com/v1
@@ -166,6 +167,8 @@ DAGSHUB_TOKEN=
 
 `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, and `LLM_API_KEY` are the preferred generic runtime settings. `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, and `OPENROUTER_BASE_URL` remain supported so one backend can still keep both provider paths configured at the same time. `OPENAI_MODEL` is still accepted as a legacy fallback.
 
+For production Postgres, the app always uses `DATABASE_URL` for runtime traffic. Alembic and other maintenance jobs prefer `DATABASE_DIRECT_URL` and fall back to `DATABASE_URL` when no direct connection is configured.
+
 ## Local setup
 
 Install dependencies:
@@ -185,6 +188,13 @@ Run the database migration:
 ```bash
 alembic upgrade head
 ```
+
+The backend exposes:
+
+- `GET /health` for lightweight liveness
+- `GET /ready` for database-backed readiness
+
+See `docs/deployment/supabase.md` for Supabase-specific production setup, URL formats, SSL requirements, and migration commands.
 
 If you want the local Postgres and Redis instances from `docker-compose.yml`, start them first so the database is listening on `127.0.0.1:5434` and Redis is listening on `127.0.0.1:6379`:
 

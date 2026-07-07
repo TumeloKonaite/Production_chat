@@ -15,9 +15,9 @@ from app.services.retrieval import RetrievalService
 
 def main() -> None:
     settings = get_settings()
-    engine = get_engine()
+    engine = get_engine(use_direct=True)
     prepare_knowledge_ingestion_storage(engine)
-    session_factory = get_session_factory()
+    session_factory = get_session_factory(use_direct=True)
     retrieval_service = RetrievalService(settings=settings)
     ingestion_service = KnowledgeIngestionService(
         retrieval_service=retrieval_service,
