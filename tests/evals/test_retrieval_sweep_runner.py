@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import Settings
-from evals.retrieval_eval_runner import RetrievalDatasetValidationSummary, RetrievalEvalRunResult
-from evals.run_retrieval_sweep import (
+from evals.runners.retrieval_eval_runner import (
+    RetrievalDatasetValidationSummary,
+    RetrievalEvalRunResult,
+)
+from evals.runners.run_retrieval_sweep import (
     build_tracking_run_name_for_experiment,
     format_retrieval_sweep_summary,
     load_retrieval_sweep_config,
@@ -119,11 +122,11 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
         missing_expected_source_ids=[],
     )
     monkeypatch.setattr(
-        "evals.run_retrieval_sweep.load_and_validate_dataset",
+        "evals.runners.run_retrieval_sweep.load_and_validate_dataset",
         lambda *args, **kwargs: (["example"], validation_summary),
     )
     monkeypatch.setattr(
-        "evals.run_retrieval_sweep.create_experiment_tracker",
+        "evals.runners.run_retrieval_sweep.create_experiment_tracker",
         lambda *args, **kwargs: type("Tracker", (), {"enabled": True})(),
     )
 
@@ -167,7 +170,10 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
             validation_summary=validation_summary,
         )
 
-    monkeypatch.setattr("evals.run_retrieval_sweep.run_retrieval_eval", fake_run_retrieval_eval)
+    monkeypatch.setattr(
+        "evals.runners.run_retrieval_sweep.run_retrieval_eval",
+        fake_run_retrieval_eval,
+    )
 
     rows, artifact_paths = run_retrieval_sweep(
         sweep_config=sweep_config,
@@ -175,7 +181,7 @@ def test_run_retrieval_sweep_calls_shared_runner_for_each_experiment(
         dataset_path=tmp_path / "dataset.jsonl",
         output_dir=tmp_path / "output",
         settings=_build_settings(),
-        argv=["evals/run_retrieval_sweep.py", "--config", str(config_path)],
+        argv=["evals/runners/run_retrieval_sweep.py", "--config", str(config_path)],
     )
 
     assert len(calls) == 2

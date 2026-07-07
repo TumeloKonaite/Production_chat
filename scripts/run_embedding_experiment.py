@@ -21,7 +21,7 @@ from app.infrastructure.tracking import create_experiment_tracker
 from app.knowledge.ingestion import ingest_knowledge, prepare_knowledge_ingestion_storage
 from app.repositories.db.session import get_engine, get_session_factory
 from app.services.retrieval import RetrievalService
-from evals.run_retrieval_eval import (
+from evals.runners.run_retrieval_eval import (
     DEFAULT_DATASET_PATH,
     DEFAULT_MIN_EXPECTED_SOURCE_COVERAGE,
     build_run_config,

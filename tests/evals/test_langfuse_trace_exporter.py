@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from evals.langfuse_trace_exporter import (
+from evals.langfuse.langfuse_trace_exporter import (
     DEFAULT_FALLBACK_SUBSTRINGS,
     LangfuseExportFilters,
     build_bad_trace_export_candidate,

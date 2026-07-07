@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.infrastructure.llm import LLMResponse
-from evals.query_rewriter import (
+from evals.runners.query_rewriter import (
     QUERY_REWRITE_STATUS_EMPTY_FALLBACK,
     QUERY_REWRITE_STATUS_SUCCESS,
     QueryRewriter,

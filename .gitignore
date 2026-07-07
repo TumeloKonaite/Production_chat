@@ -10,6 +10,7 @@ wheels/
 .venv
 .env
 .pytest_cache/
+.pytest_tmp/
 .uv-cache/
 mlflow.db
 mlruns/
@@ -18,3 +19,5 @@ evals/prompt_eval_results/*
 !evals/prompt_eval_results/.gitkeep
 evals/results/*
 !evals/results/.gitkeep
+evals/outputs/*
+evals/datasets/production_failures_review.jsonl

@@ -8,7 +8,7 @@ The canonical RAG evaluation dataset for this repository is:
 evals/datasets/portfolio_eval_dataset.jsonl
 ```
 
-`evals/run_rag_eval.py` loads this file by default, and the rows are parsed by
+`evals/runners/run_rag_eval.py` loads this file by default, and the rows are parsed by
 `app/services/evals/rag_eval_service.py` into
 `app/domain/evals/schemas.py:RagEvalDatasetExample`.
 
@@ -165,7 +165,7 @@ Only change existing benchmark rows when:
 ## Other eval datasets
 
 `evals/datasets/generation_eval_dataset.jsonl` is the fixed-context generation
-comparison dataset used by `evals/run_generation_eval.py`.
+comparison dataset used by `evals/runners/run_generation_eval.py`.
 
 Its role is model-to-model answer comparison while holding retrieval constant.
 Each row includes the question plus the exact retrieved context that every
@@ -173,7 +173,7 @@ model should see for that example. Prefer this dataset when the experiment goal
 is answer quality, latency, token usage, or cost comparison across providers.
 
 `evals/datasets/model_eval_dataset.jsonl` is not the canonical RAG benchmark.
-It is a separate legacy-style dataset used by `evals/run_model_eval.py`, which
+It is a separate legacy-style dataset used by `evals/runners/run_model_eval.py`, which
 still evaluates responses with the older `expected_facts` contract in
 `app/services/evals/eval_service.py`.
 
@@ -205,7 +205,7 @@ the maintenance goal.
 
 ## Langfuse review queue exports
 
-`python -m evals.export_bad_langfuse_traces` exports failed or low-quality
+`python -m evals.langfuse.export_bad_langfuse_traces` exports failed or low-quality
 production traces into a separate JSONL review queue. This is intentionally not
 the canonical benchmark and does not weaken the source-coverage or
 answer-points rules above.
@@ -247,22 +247,22 @@ Operational note:
 
 ## Retrieval Sweep Runner
 
-Use `evals/run_retrieval_sweep.py` to compare multiple retrieval configurations
+Use `evals/runners/run_retrieval_sweep.py` to compare multiple retrieval configurations
 against the same dataset without rerunning the single-run CLI manually.
 
 The single-run retrieval eval also supports JSON config files for baseline vs
 reranked comparisons:
 
 ```text
-configs/evals/retrieval_baseline.json
-configs/evals/retrieval_reranked_llm.json
+evals/configs/retrieval_baseline.json
+evals/configs/retrieval_reranked_llm.json
 ```
 
 Example commands:
 
 ```text
-uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_baseline.json
-uv run python evals/run_retrieval_eval.py --config configs/evals/retrieval_reranked_llm.json
+uv run python -m evals.runners.run_retrieval_eval --config evals/configs/retrieval_baseline.json
+uv run python -m evals.runners.run_retrieval_eval --config evals/configs/retrieval_reranked_llm.json
 ```
 
 Example config:
@@ -274,7 +274,7 @@ evals/configs/retrieval_sweep.yaml
 Example command:
 
 ```text
-python evals/run_retrieval_sweep.py --config evals/configs/retrieval_sweep.yaml
+python -m evals.runners.run_retrieval_sweep --config evals/configs/retrieval_sweep.yaml
 ```
 
 Operational notes:

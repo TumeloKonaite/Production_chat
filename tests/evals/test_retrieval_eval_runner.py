@@ -8,13 +8,13 @@ from app.domain.evals import JudgeEvaluation, JudgeMetricScore
 from app.infrastructure.llm.base import TokenUsage
 from app.services.retrieval import RetrievedChunk
 import pytest
-from evals.query_rewriter import (
+from evals.runners.query_rewriter import (
     QUERY_REWRITE_STATUS_EMPTY_FALLBACK,
     QUERY_REWRITE_STATUS_ERROR_FALLBACK,
     QUERY_REWRITE_STATUS_SUCCESS,
     QueryRewriteResult,
 )
-from evals.run_retrieval_eval import (
+from evals.runners.run_retrieval_eval import (
     RetrievalEvalExample,
     RetrievalEvalDatasetValidationError,
     build_run_config,
@@ -448,7 +448,7 @@ def test_build_run_config_captures_retrieval_settings() -> None:
         dataset_path=Path("evals/datasets/portfolio_eval_dataset.jsonl"),
         top_k=5,
         timestamp="2026-07-02T20:30:00+02:00",
-        argv=["evals/run_retrieval_eval.py", "--k", "5"],
+        argv=["evals/runners/run_retrieval_eval.py", "--k", "5"],
         run_name="retrieval-vector-k5-2026-07-02_203000",
         notes="Triggered from API",
     )
@@ -594,6 +594,101 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
             "context_relevance": 0.0,
         }
     ]
+    assert tracker.artifacts == list(artifact_paths.values())
+
+
+def test_log_run_to_tracker_logs_feedback_dataset_metadata(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "retriever_type": "vector",
+            "default_retrieval_config": "default",
+            "embedding_provider": "hf",
+            "knowledge_embedding_model": "all-MiniLM-L6-v2",
+            "embedding_dimension": 384,
+            "knowledge_collection_name": "personal_knowledge_base",
+            "retrieval_min_similarity": 0.55,
+        },
+    )()
+    artifact_paths = {
+        "results_json": tmp_path / "results.json",
+        "results_csv": tmp_path / "results.csv",
+        "config_json": tmp_path / "config.json",
+        "feedback_dataset_jsonl": tmp_path / "feedback.jsonl",
+        "feedback_dataset_summary_json": tmp_path / "feedback_dataset_summary.json",
+        "production_trace_ids_json": tmp_path / "production_trace_ids.json",
+    }
+    for path in artifact_paths.values():
+        path.write_text("{}", encoding="utf-8")
+
+    log_run_to_tracker(
+        tracker=tracker,
+        settings=settings,
+        dataset_path=Path("evals/datasets/production_feedback.jsonl"),
+        top_k=5,
+        summary={
+            "num_queries_total": 2,
+            "num_queries_evaluated": 1,
+            "num_queries_without_expected_source": 1,
+            "num_queries_without_expected_sources": 1,
+            "hit_at_k": 1.0,
+            "recall_at_k": 1.0,
+            "mean_precision_at_k": 0.5,
+            "mrr": 1.0,
+        },
+        config={
+            "notes": None,
+            "chunk_size": None,
+            "chunk_overlap": None,
+            "git_commit_sha": None,
+            "query_rewriting": False,
+            "query_rewriting_enabled": False,
+            "query_rewrite_model": None,
+            "query_rewrite_temperature": 0.0,
+            "query_rewrite_prompt_version": "v1",
+            "query_rewrite_timeout_seconds": 10,
+            "query_rewrite_max_tokens": 128,
+            "reranker": "none",
+            "reranker_enabled": False,
+            "reranker_type": "none",
+            "reranker_model": None,
+            "reranker_initial_top_k": 5,
+            "reranker_final_top_k": 5,
+            "feedback_tracking_params": {
+                "dataset_source": "production_feedback",
+                "feedback_dataset_path": "evals/datasets/production_feedback.jsonl",
+                "feedback_dataset_version": "abc123",
+                "feedback_case_count": 2,
+                "feedback_negative_count": 2,
+                "feedback_positive_count": 0,
+                "feedback_neutral_count": 0,
+                "feedback_unknown_count": 0,
+                "feedback_labeled_generation_count": 1,
+                "feedback_labeled_retrieval_count": 1,
+                "feedback_date_from": "2026-07-01T00:00:00Z",
+                "feedback_date_to": "2026-07-06T00:00:00Z",
+                "feedback_reasons": "incorrect_answer",
+                "feedback_retrieval_hit_rate_available": True,
+            },
+            "feedback_metrics": {
+                "feedback_cases_total": 2,
+                "feedback_cases_answered": 2,
+                "feedback_cases_skipped_missing_labels": 1,
+                "feedback_pass_rate": 1.0,
+                "feedback_retrieval_hit_rate": 1.0,
+                "feedback_regression_failures": 0,
+            },
+        },
+        artifact_paths=artifact_paths,
+        run_name="retrieval-vector-k5-feedback",
+    )
+
+    assert tracker.params[0]["dataset_source"] == "production_feedback"
+    assert tracker.params[0]["feedback_dataset_version"] == "abc123"
+    assert tracker.metrics[0]["feedback_cases_total"] == 2
+    assert tracker.metrics[0]["feedback_retrieval_hit_rate"] == 1.0
     assert tracker.artifacts == list(artifact_paths.values())
 
 
@@ -814,14 +909,14 @@ def test_run_retrieval_eval_with_query_rewriting_disabled_uses_original_query(
     )
 
     monkeypatch.setattr(
-        "evals.retrieval_eval_runner.RetrievalService",
+        "evals.runners.retrieval_eval_runner.RetrievalService",
         lambda settings: retrieval_service,
     )
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("QueryRewriter should not be constructed when rewriting is disabled.")
 
-    monkeypatch.setattr("evals.retrieval_eval_runner.QueryRewriter", fail_if_called)
+    monkeypatch.setattr("evals.runners.retrieval_eval_runner.QueryRewriter", fail_if_called)
 
     settings = type(
         "Settings",
@@ -861,7 +956,7 @@ def test_run_retrieval_eval_with_query_rewriting_disabled_uses_original_query(
         output_root=tmp_path / "output",
         top_k=5,
         tracker=FakeTracker(enabled=False),
-        argv=["evals/run_retrieval_eval.py"],
+        argv=["evals/runners/run_retrieval_eval.py"],
         examples=examples,
         validation_summary=validation_summary,
         timestamp="2026-07-04T12:00:00+02:00",
@@ -877,7 +972,7 @@ def test_run_retrieval_eval_with_query_rewriting_disabled_uses_original_query(
 def test_parse_args_accepts_query_rewriting_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
-        ["evals/run_retrieval_eval.py", "--enable-query-rewriting"],
+        ["evals/runners/run_retrieval_eval.py", "--enable-query-rewriting"],
     )
 
     args = parse_args()
@@ -889,19 +984,19 @@ def test_parse_args_accepts_query_rewriting_flags(monkeypatch: pytest.MonkeyPatc
 def test_parse_args_accepts_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
-        ["evals/run_retrieval_eval.py", "--config", "configs/evals/retrieval_baseline.json"],
+        ["evals/runners/run_retrieval_eval.py", "--config", "evals/configs/retrieval_baseline.json"],
     )
 
     args = parse_args()
 
-    assert args.config == Path("configs/evals/retrieval_baseline.json")
+    assert args.config == Path("evals/configs/retrieval_baseline.json")
 
 
 def test_parse_args_accepts_reranker_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "evals/run_retrieval_eval.py",
+            "evals/runners/run_retrieval_eval.py",
             "--enable-reranker",
             "--reranker-type",
             "llm",

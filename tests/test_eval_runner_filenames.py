@@ -1,5 +1,5 @@
-from evals.run_generation_eval import _safe_file_stem as generation_safe_file_stem
-from evals.run_model_eval import _safe_file_stem as model_safe_file_stem
+from evals.runners.run_generation_eval import _safe_file_stem as generation_safe_file_stem
+from evals.runners.run_model_eval import _safe_file_stem as model_safe_file_stem
 
 
 def test_generation_eval_safe_file_stem_sanitizes_provider_style_model_ids() -> None:

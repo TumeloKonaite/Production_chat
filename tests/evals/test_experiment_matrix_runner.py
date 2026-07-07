@@ -13,9 +13,12 @@ from app.services.evals.generation_eval_service import (
 from evals.matrix.config_loader import load_experiment_matrix_config
 from evals.matrix.models import ExperimentMatrixConfig, ExperimentSuiteConfig
 from evals.matrix.runner import run_experiment_matrix
-from evals.retrieval_eval_runner import RetrievalDatasetValidationSummary, RetrievalEvalRunResult
-from evals.run_generation_eval import GenerationEvalRunResult
-import evals.run_experiment_matrix as experiment_matrix_cli
+from evals.runners.retrieval_eval_runner import (
+    RetrievalDatasetValidationSummary,
+    RetrievalEvalRunResult,
+)
+from evals.runners.run_generation_eval import GenerationEvalRunResult
+import evals.runners.run_experiment_matrix as experiment_matrix_cli
 
 
 async def _fake_generation_runner(**kwargs) -> GenerationEvalRunResult:
@@ -31,6 +34,8 @@ async def _fake_generation_runner(**kwargs) -> GenerationEvalRunResult:
         model_name="gpt-4.1-mini",
         model_base_url="https://api.openai.com/v1",
         total_examples=1,
+        scored_examples=1,
+        skipped_examples=0,
         passed_examples=1,
         failed_examples=0,
         pass_rate=1.0,
@@ -59,11 +64,18 @@ async def _fake_generation_runner(**kwargs) -> GenerationEvalRunResult:
         model_provider="openai",
         model_name="gpt-4.1-mini",
         model_base_url="https://api.openai.com/v1",
+        dataset_source="generation_eval",
+        trace_id=None,
         question="What does Tumelo do?",
         category="profile",
         expected_facts=["engineer"],
         expected_answer_points=["engineer"],
+        expected_answer="Tumelo is an engineer.",
         expected_behavior=None,
+        actual_answer=None,
+        feedback_rating=None,
+        feedback_reason=None,
+        feedback_comment=None,
         generated_answer="Tumelo is an engineer.",
         latency_ms=120,
         prompt_tokens=200,
@@ -73,8 +85,13 @@ async def _fake_generation_runner(**kwargs) -> GenerationEvalRunResult:
         estimated_completion_cost_usd=0.002,
         estimated_cost_usd=0.003,
         quality_score=5,
+        scored=True,
         groundedness_score=4.0,
         passed=True,
+        requires_human_label=False,
+        skipped_missing_labels=False,
+        expected_facts_coverage=1.0,
+        judge_score=5.0,
         used_fallback=False,
         fixed_context_sources=["profile.md"],
         judge_evaluation=None,
@@ -127,7 +144,7 @@ def test_run_experiment_matrix_writes_generation_outputs_and_failures(
         matrix_config=matrix_config,
         suite_name="generation_smoke",
         settings=_build_settings(),
-        argv=["evals/run_experiment_matrix.py", "--suite", "generation_smoke"],
+        argv=["evals/runners/run_experiment_matrix.py", "--suite", "generation_smoke"],
         output_dir=tmp_path / "outputs",
         generation_dataset_path=tmp_path / "generation.jsonl",
         dry_run=False,
@@ -184,7 +201,7 @@ def test_run_experiment_matrix_enforces_max_combinations(tmp_path: Path) -> None
             matrix_config=matrix_config,
             suite_name="rag_too_large",
             settings=_build_settings(),
-            argv=["evals/run_experiment_matrix.py", "--suite", "rag_too_large"],
+            argv=["evals/runners/run_experiment_matrix.py", "--suite", "rag_too_large"],
             output_dir=tmp_path / "outputs",
         )
     except ValueError as exc:
@@ -223,7 +240,7 @@ def test_run_experiment_matrix_allows_dry_run_for_full_suite(tmp_path: Path) -> 
         matrix_config=matrix_config,
         suite_name="rag_full",
         settings=_build_settings(),
-        argv=["evals/run_experiment_matrix.py", "--suite", "rag_full", "--dry-run"],
+        argv=["evals/runners/run_experiment_matrix.py", "--suite", "rag_full", "--dry-run"],
         output_dir=tmp_path / "outputs",
         dry_run=True,
     )
@@ -262,7 +279,7 @@ def test_run_experiment_matrix_requires_confirmation_for_full_suite(tmp_path: Pa
             matrix_config=matrix_config,
             suite_name="rag_full",
             settings=_build_settings(),
-            argv=["evals/run_experiment_matrix.py", "--suite", "rag_full"],
+            argv=["evals/runners/run_experiment_matrix.py", "--suite", "rag_full"],
             output_dir=tmp_path / "outputs",
         )
     except ValueError as exc:
