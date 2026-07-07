@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 import pytest
@@ -11,7 +12,10 @@ from app.api.dependencies.common_dependencies import get_app_settings, get_db_se
 from app.api.dependencies.knowledge_dependencies import get_knowledge_ingestion_service_factory
 from app.config import Settings
 from app.knowledge.ingestion import (
+    KnowledgeIngestionConflictError,
     KnowledgeIngestionDocumentResult,
+    KnowledgeIngestionGoneError,
+    KnowledgeIngestionNotFoundError,
     KnowledgeIngestionRunResult,
     KnowledgeIngestionServiceError,
 )
@@ -79,7 +83,12 @@ class FakeKnowledgeIngestionService:
     ) -> None:
         self.result = result or KnowledgeIngestionRunResult(
             status="ok",
+            source_type="local_directory",
+            file_id=None,
             documents_loaded=2,
+            chunks_created=10,
+            chunks_updated=0,
+            chunks_skipped=0,
             results=[
                 KnowledgeIngestionDocumentResult(source="profile.md", chunk_count=3),
                 KnowledgeIngestionDocumentResult(source="projects.md", chunk_count=7),
@@ -87,9 +96,11 @@ class FakeKnowledgeIngestionService:
         )
         self.error = error
         self.calls: list[Session] = []
+        self.requests: list[object | None] = []
 
-    def run(self, session: Session) -> KnowledgeIngestionRunResult:
+    def run(self, session: Session, request=None) -> KnowledgeIngestionRunResult:
         self.calls.append(session)
+        self.requests.append(request)
         if self.error is not None:
             raise self.error
         return self.result
@@ -171,18 +182,25 @@ def test_knowledge_ingest_accepts_valid_secret_and_returns_summary() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "source_type": "local_directory",
+        "file_id": None,
         "experiment_name": None,
         "embedding_provider": "hf",
         "embedding_model": "all-MiniLM-L6-v2",
         "embedding_dimension": 384,
         "documents_loaded": 2,
         "chunks_created": 10,
+        "chunks_updated": 0,
+        "chunks_skipped": 0,
         "results": [
             {"source": "profile.md", "chunk_count": 3},
             {"source": "projects.md", "chunk_count": 7},
         ],
     }
     assert len(factory.service.calls) == 1
+    assert len(factory.service.requests) == 1
+    assert factory.service.requests[0].source_type == "local_directory"
+    assert factory.service.requests[0].file_id is None
     assert len(factory.created_settings) == 1
     assert factory.created_settings[0].embedding_provider == "hf"
     assert factory.created_settings[0].knowledge_embedding_model == "all-MiniLM-L6-v2"
@@ -287,6 +305,134 @@ def test_knowledge_ingest_requires_reset_flag_for_embedding_override() -> None:
 
     assert response.status_code == 422
     assert "reset_existing_vectors=true is required" in str(response.json())
+
+
+def test_knowledge_ingest_accepts_uploaded_file_request() -> None:
+    file_id = str(uuid4())
+    factory = CapturingIngestionServiceFactory()
+    factory.service = FakeKnowledgeIngestionService(
+        result=KnowledgeIngestionRunResult(
+            status="ingested",
+            source_type="uploaded_file",
+            file_id=file_id,
+            documents_loaded=1,
+            chunks_created=2,
+            chunks_updated=0,
+            chunks_skipped=0,
+            results=[
+                KnowledgeIngestionDocumentResult(source="company-profile.md", chunk_count=2)
+            ],
+        )
+    )
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: factory
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"source_type": "uploaded_file", "file_id": file_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ingested",
+        "source_type": "uploaded_file",
+        "file_id": file_id,
+        "experiment_name": None,
+        "embedding_provider": "hf",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dimension": 384,
+        "documents_loaded": 1,
+        "chunks_created": 2,
+        "chunks_updated": 0,
+        "chunks_skipped": 0,
+        "results": [{"source": "company-profile.md", "chunk_count": 2}],
+    }
+    assert factory.service.requests[0].source_type == "uploaded_file"
+    assert str(factory.service.requests[0].file_id) == file_id
+
+
+def test_knowledge_ingest_uploaded_file_requires_file_id() -> None:
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = (
+        lambda: (lambda settings=None: FakeKnowledgeIngestionService())
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"source_type": "uploaded_file"},
+    )
+
+    assert response.status_code == 422
+    assert "file_id is required" in str(response.json())
+
+
+def test_knowledge_ingest_uploaded_file_maps_not_found_error() -> None:
+    fake_service = FakeKnowledgeIngestionService(
+        error=KnowledgeIngestionNotFoundError("Knowledge file not found.")
+    )
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: (
+        lambda settings=None: fake_service
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"source_type": "uploaded_file", "file_id": str(uuid4())},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Knowledge file not found."}
+
+
+def test_knowledge_ingest_uploaded_file_maps_conflict_error() -> None:
+    fake_service = FakeKnowledgeIngestionService(
+        error=KnowledgeIngestionConflictError("Knowledge file is already being ingested.")
+    )
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: (
+        lambda settings=None: fake_service
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"source_type": "uploaded_file", "file_id": str(uuid4())},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Knowledge file is already being ingested."}
+
+
+def test_knowledge_ingest_uploaded_file_maps_gone_error() -> None:
+    fake_service = FakeKnowledgeIngestionService(
+        error=KnowledgeIngestionGoneError("Knowledge file has been deleted.")
+    )
+    app.dependency_overrides[get_app_settings] = build_test_settings
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_knowledge_ingestion_service_factory] = lambda: (
+        lambda settings=None: fake_service
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/ingest",
+        headers={"x-ingestion-secret": "ingestion-secret"},
+        json={"source_type": "uploaded_file", "file_id": str(uuid4())},
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": "Knowledge file has been deleted."}
 
 
 def test_knowledge_ingest_logs_effective_embedding_config_when_tracking_is_enabled(

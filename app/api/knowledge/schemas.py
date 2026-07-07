@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -9,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class KnowledgeIngestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    source_type: Literal["local_directory", "uploaded_file"] = "local_directory"
+    file_id: UUID | None = None
     experiment_name: str | None = Field(default=None, min_length=1, max_length=200)
     embedding_provider: Literal["hf", "openai", "openrouter"] | None = None
     embedding_model: str | None = Field(default=None, min_length=1, max_length=300)
@@ -25,6 +28,11 @@ class KnowledgeIngestionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_embedding_override(self) -> KnowledgeIngestionRequest:
+        if self.source_type == "uploaded_file" and self.file_id is None:
+            raise ValueError("file_id is required when source_type=uploaded_file.")
+        if self.source_type == "local_directory" and self.file_id is not None:
+            raise ValueError("file_id is only supported when source_type=uploaded_file.")
+
         override_values = (
             self.embedding_provider,
             self.embedding_model,
@@ -52,13 +60,17 @@ class KnowledgeIngestionDocumentResponse(BaseModel):
 
 
 class KnowledgeIngestionResponse(BaseModel):
-    status: Literal["ok"]
+    status: Literal["ok", "ingested"]
+    source_type: Literal["local_directory", "uploaded_file"]
+    file_id: UUID | None = None
     experiment_name: str | None = None
     embedding_provider: str
     embedding_model: str
     embedding_dimension: int
     documents_loaded: int
     chunks_created: int
+    chunks_updated: int = 0
+    chunks_skipped: int = 0
     results: list[KnowledgeIngestionDocumentResponse]
 
 
