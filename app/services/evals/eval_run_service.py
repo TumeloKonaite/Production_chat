@@ -52,10 +52,6 @@ class EvalRunService:
         self._base_output_dir = base_output_dir.resolve()
         self._base_output_dir.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def base_output_dir(self) -> Path:
-        return self._base_output_dir
-
     def build_run_id(
         self,
         *,

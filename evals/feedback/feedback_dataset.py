@@ -106,15 +106,6 @@ class FeedbackDatasetSummary:
     production_trace_ids: list[str]
     langfuse_trace_ids: list[str]
 
-
-def is_feedback_dataset_path(path: Path) -> bool:
-    try:
-        rows = load_feedback_dataset(path)
-    except (FileNotFoundError, ValueError):
-        return False
-    return bool(rows)
-
-
 def load_feedback_dataset(path: Path) -> list[FeedbackEvalExample]:
     rows: list[FeedbackEvalExample] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():

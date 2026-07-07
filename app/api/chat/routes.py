@@ -10,13 +10,17 @@ from app.api.chat.schemas import (
 from app.api.dependencies.chat_dependencies import get_chat_service, get_feedback_service
 from app.services.chat import ChatService
 from app.services.feedback import MessageFeedbackService
+from app.services.rate_limiting.dependencies import require_chat_rate_limit
+from app.services.rate_limiting.schemas import ChatRateLimitContext
 
 router = APIRouter(tags=["chat"])
 
 
+@router.post("/api/chat", response_model=ChatResponse, include_in_schema=False)
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    rate_limit: ChatRateLimitContext = Depends(require_chat_rate_limit),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
     response = await chat_service.generate_reply(
@@ -24,6 +28,7 @@ async def chat(
         conversation_id=request.conversation_id,
         prompt_version=request.prompt_version,
         model_config_id=request.model_config_id,
+        rate_limit_actor=rate_limit.actor,
     )
     return ChatResponse(
         conversation_id=response.conversation_id,

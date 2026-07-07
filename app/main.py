@@ -22,6 +22,10 @@ from app.services.feedback import (
     MessageFeedbackTargetNotFoundError,
 )
 from app.services.llm import LLMConfigurationError, LLMServiceError
+from app.services.rate_limiting import (
+    RateLimitExceededError,
+    RateLimitingBackendUnavailableError,
+)
 from app.services.retrieval import EmbeddingConfigurationError, VectorIndexConfigurationError
 from app.services.tavus import TavusConfigurationError, TavusServiceError
 
@@ -171,6 +175,30 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"detail": "Unable to generate assistant response. Please try again."},
+        )
+
+    @app.exception_handler(RateLimitExceededError)
+    async def handle_rate_limit_exceeded(
+        _: Request,
+        exc: RateLimitExceededError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "detail": exc.detail,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(RateLimitingBackendUnavailableError)
+    async def handle_rate_limiting_backend_unavailable(
+        _: Request,
+        exc: RateLimitingBackendUnavailableError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": exc.detail},
         )
 
     @app.exception_handler(ChatPersistenceError)

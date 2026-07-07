@@ -42,6 +42,8 @@ from app.services.chat.errors import (
     InvalidConversationIdError,
 )
 from app.services.llm.service import LLMChatMessage, LLMGeneratedResponse, TokenUsage
+from app.services.rate_limiting.schemas import RateLimitActor
+from app.services.rate_limiting.service import RateLimitingService
 from app.services.retrieval import RetrievedChunk, RetrievalService
 from app.services.tracing import TraceService, TraceServiceError
 
@@ -104,6 +106,7 @@ class ChatService:
         knowledge_repository: KnowledgeRepository,
         retrieval_service: RetrievalService,
         response_cache: ResponseCache,
+        rate_limiting_service: RateLimitingService,
         trace_service: TraceService | None,
         observability_tracer: ObservabilityTracer,
         history_limit: int,
@@ -116,6 +119,7 @@ class ChatService:
         self.knowledge_repository = knowledge_repository
         self.retrieval_service = retrieval_service
         self.response_cache = response_cache
+        self.rate_limiting_service = rate_limiting_service
         self.trace_service = trace_service
         self.observability_tracer = observability_tracer
         self.history_limit = history_limit
@@ -128,12 +132,14 @@ class ChatService:
         conversation_id: str | None = None,
         prompt_version: str | None = None,
         model_config_id: str | None = None,
+        rate_limit_actor: RateLimitActor | None = None,
     ) -> ChatReply:
         return await self._generate_reply(
             message=message,
             conversation_id=conversation_id,
             prompt_version=prompt_version,
             model_config_id=model_config_id,
+            rate_limit_actor=rate_limit_actor,
             channel="web_chat",
             message_metadata={},
             allow_external_conversation_id=False,
@@ -148,12 +154,14 @@ class ChatService:
         metadata: dict[str, object] | None = None,
         prompt_version: str | None = None,
         model_config_id: str | None = None,
+        rate_limit_actor: RateLimitActor | None = None,
     ) -> ChatReply:
         return await self._generate_reply(
             message=user_message,
             conversation_id=conversation_id,
             prompt_version=prompt_version,
             model_config_id=model_config_id,
+            rate_limit_actor=rate_limit_actor,
             channel=channel,
             message_metadata=dict(metadata or {}),
             allow_external_conversation_id=channel == "tavus_video",
@@ -166,6 +174,7 @@ class ChatService:
         conversation_id: str | None,
         prompt_version: str | None,
         model_config_id: str | None,
+        rate_limit_actor: RateLimitActor | None,
         channel: str,
         message_metadata: dict[str, object],
         allow_external_conversation_id: bool,
@@ -300,6 +309,9 @@ class ChatService:
                     )
                     response_cache_context.llm_latency_ms = 0
                 else:
+                    await self.rate_limiting_service.enforce_chat_budget(
+                        actor=rate_limit_actor,
+                    )
                     llm_messages = [
                         LLMChatMessage(role=stored_message.role, content=stored_message.content)
                         for stored_message in recent_messages
@@ -396,6 +408,11 @@ class ChatService:
                         latency_ms=llm_latency_ms,
                         started_at=llm_started_at,
                         completed_at=self._utcnow(),
+                    )
+                    await self.rate_limiting_service.record_llm_usage(
+                        actor=rate_limit_actor,
+                        total_tokens=llm_response.token_usage.total_tokens,
+                        estimated_cost_usd=llm_response.estimated_cost_usd,
                     )
 
                 if self._should_store_response_cache(

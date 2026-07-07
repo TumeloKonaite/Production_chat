@@ -83,6 +83,25 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("LANGFUSE_RELEASE", raising=False)
     monkeypatch.delenv("LANGFUSE_SAMPLE_RATE", raising=False)
     monkeypatch.delenv("LANGFUSE_EXPORT_DEFAULT_LIMIT", raising=False)
+    monkeypatch.delenv("ENABLE_RESPONSE_CACHE", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_PROVIDER", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("ENABLE_EXACT_RESPONSE_CACHE", raising=False)
+    monkeypatch.delenv("ENABLE_SEMANTIC_RESPONSE_CACHE", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_EXACT_PREFIX", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_SEMANTIC_INDEX", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_DISTANCE_THRESHOLD", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_MAX_RESULTS", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_STORE_PRIVATE_SESSIONS", raising=False)
+    monkeypatch.delenv("RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION", raising=False)
+    monkeypatch.delenv("ENABLE_RATE_LIMITING", raising=False)
+    monkeypatch.delenv("RATE_LIMITING_FAIL_OPEN", raising=False)
+    monkeypatch.delenv("CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES", raising=False)
+    monkeypatch.delenv("CHAT_RATE_LIMIT_REQUESTS_PER_DAY", raising=False)
+    monkeypatch.delenv("CHAT_RATE_LIMIT_CONCURRENT_REQUESTS", raising=False)
+    monkeypatch.delenv("CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET", raising=False)
+    monkeypatch.delenv("CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD", raising=False)
 
     settings = get_settings()
 
@@ -124,6 +143,13 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.response_cache_max_results == 3
     assert settings.response_cache_store_private_sessions is False
     assert settings.response_cache_knowledge_base_version == "personal_knowledge_base"
+    assert settings.enable_rate_limiting is False
+    assert settings.rate_limiting_fail_open is True
+    assert settings.chat_rate_limit_requests_per_10_minutes == 20
+    assert settings.chat_rate_limit_requests_per_day == 100
+    assert settings.chat_rate_limit_concurrent_requests == 3
+    assert settings.chat_rate_limit_daily_token_budget == 100000
+    assert settings.chat_rate_limit_daily_cost_budget_usd == 0.50
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,6 +270,28 @@ def test_get_settings_uses_configured_response_cache_values(
     assert settings.response_cache_knowledge_base_version == "kb-v2"
 
 
+def test_get_settings_uses_configured_rate_limiting_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "true")
+    monkeypatch.setenv("RATE_LIMITING_FAIL_OPEN", "false")
+    monkeypatch.setenv("CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES", "12")
+    monkeypatch.setenv("CHAT_RATE_LIMIT_REQUESTS_PER_DAY", "45")
+    monkeypatch.setenv("CHAT_RATE_LIMIT_CONCURRENT_REQUESTS", "2")
+    monkeypatch.setenv("CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET", "9000")
+    monkeypatch.setenv("CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD", "1.25")
+
+    settings = get_settings()
+
+    assert settings.enable_rate_limiting is True
+    assert settings.rate_limiting_fail_open is False
+    assert settings.chat_rate_limit_requests_per_10_minutes == 12
+    assert settings.chat_rate_limit_requests_per_day == 45
+    assert settings.chat_rate_limit_concurrent_requests == 2
+    assert settings.chat_rate_limit_daily_token_budget == 9000
+    assert settings.chat_rate_limit_daily_cost_budget_usd == 1.25
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value", "expected_message"),
     [
@@ -258,6 +306,11 @@ def test_get_settings_uses_configured_response_cache_values(
         ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
         ("RESPONSE_CACHE_TTL_SECONDS", "0", "RESPONSE_CACHE_TTL_SECONDS must be greater than 0."),
         ("RESPONSE_CACHE_MAX_RESULTS", "0", "RESPONSE_CACHE_MAX_RESULTS must be greater than 0."),
+        ("CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES", "0", "CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES must be greater than 0."),
+        ("CHAT_RATE_LIMIT_REQUESTS_PER_DAY", "0", "CHAT_RATE_LIMIT_REQUESTS_PER_DAY must be greater than 0."),
+        ("CHAT_RATE_LIMIT_CONCURRENT_REQUESTS", "0", "CHAT_RATE_LIMIT_CONCURRENT_REQUESTS must be greater than 0."),
+        ("CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET", "0", "CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET must be greater than 0."),
+        ("CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD", "-0.1", "CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD must be greater than or equal to 0."),
         ("LANGFUSE_SAMPLE_RATE", "-0.1", "LANGFUSE_SAMPLE_RATE must be greater than or equal to 0."),
         ("LANGFUSE_EXPORT_DEFAULT_LIMIT", "0", "LANGFUSE_EXPORT_DEFAULT_LIMIT must be greater than 0."),
     ],

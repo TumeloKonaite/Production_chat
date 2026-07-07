@@ -15,6 +15,7 @@ from app.services.cache import NoOpResponseCache, RedisResponseCache, ResponseCa
 from app.services.chat import ChatService
 from app.services.feedback import MessageFeedbackService
 from app.services.llm import LLMService
+from app.services.rate_limiting.service import RateLimitingService
 from app.services.retrieval import RetrievalService
 from app.services.tracing import TraceService
 
@@ -118,6 +119,17 @@ def get_response_cache(
     return _build_response_cache(settings)
 
 
+@lru_cache
+def _build_rate_limiting_service(settings: Settings) -> RateLimitingService:
+    return RateLimitingService(settings=settings)
+
+
+def get_rate_limiting_service(
+    settings: Settings = Depends(get_app_settings),
+) -> RateLimitingService:
+    return _build_rate_limiting_service(settings)
+
+
 def get_chat_service(
     settings: Settings = Depends(get_app_settings),
     llm_service: LLMService = Depends(get_llm_service),
@@ -126,6 +138,7 @@ def get_chat_service(
     knowledge_repository: KnowledgeRepository = Depends(get_knowledge_repository),
     retrieval_service: RetrievalService = Depends(get_retrieval_service),
     response_cache: ResponseCache = Depends(get_response_cache),
+    rate_limiting_service: RateLimitingService = Depends(get_rate_limiting_service),
     trace_service: TraceService = Depends(get_trace_service),
     observability_tracer: ObservabilityTracer = Depends(get_observability_tracer),
 ) -> ChatService:
@@ -136,6 +149,7 @@ def get_chat_service(
         knowledge_repository=knowledge_repository,
         retrieval_service=retrieval_service,
         response_cache=response_cache,
+        rate_limiting_service=rate_limiting_service,
         trace_service=trace_service,
         observability_tracer=observability_tracer,
         history_limit=settings.conversation_history_limit,

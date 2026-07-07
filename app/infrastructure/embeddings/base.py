@@ -40,9 +40,6 @@ class EmbeddingProvider(Embeddings, ABC):
             dimension=self.dimension,
         )
 
-    def collection_metadata(self) -> dict[str, object]:
-        return self.descriptor.as_metadata()
-
     def validate_embedding_dimensions(
         self,
         vectors: list[list[float]],

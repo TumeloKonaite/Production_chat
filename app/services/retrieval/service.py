@@ -69,10 +69,6 @@ class RetrievalService:
         return self._retriever_type
 
     @property
-    def embedding_descriptor(self) -> EmbeddingDescriptor:
-        return self._embedding_descriptor
-
-    @property
     def embedding_metadata(self) -> dict[str, object]:
         return self._embedding_descriptor.as_metadata()
 
@@ -101,9 +97,6 @@ class RetrievalService:
     def embed_query(self, query: str) -> list[float]:
         embedding = self._get_embedding_provider().embed_query(query)
         return self._get_embedding_provider().validate_query_dimension(embedding)
-
-    def get_vector_store_dimension(self) -> int | None:
-        return self._get_vector_column_dimension()
 
     def replace_all_chunks(self, chunks: list[KnowledgeChunk]) -> None:
         self._ensure_vector_dimension_is_supported()
