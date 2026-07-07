@@ -4,7 +4,9 @@ from fastapi import Depends
 
 from app.api.dependencies.common_dependencies import get_app_settings
 from app.config import Settings
+from app.infrastructure.storage import create_knowledge_file_storage
 from app.knowledge.ingestion import KnowledgeIngestionService
+from app.services.knowledge_files import KnowledgeFileUploadService
 from app.services.retrieval import RetrievalService
 
 
@@ -24,3 +26,12 @@ def get_knowledge_ingestion_service_factory(
         return build_knowledge_ingestion_service(resolved_settings)
 
     return build_service
+
+
+def get_knowledge_file_upload_service(
+    settings: Settings = Depends(get_app_settings),
+) -> KnowledgeFileUploadService:
+    return KnowledgeFileUploadService(
+        settings=settings,
+        storage=create_knowledge_file_storage(settings),
+    )

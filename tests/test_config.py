@@ -15,6 +15,7 @@ from app.config import (
     SUPPORTED_RERANKER_TYPES,
     SUPPORTED_RESPONSE_CACHE_PROVIDERS,
     SUPPORTED_RETRIEVER_TYPES,
+    SUPPORTED_STORAGE_PROVIDERS,
     SUPPORTED_VECTOR_STORE_PROVIDERS,
     get_settings,
 )
@@ -119,6 +120,14 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.frontend_origins == [DEFAULT_LOCAL_FRONTEND_ORIGIN]
     assert settings.database_direct_url is None
     assert settings.vector_store_provider == "pgvector"
+    assert settings.storage_provider == "minio"
+    assert settings.minio_endpoint == "http://localhost:9000"
+    assert settings.minio_access_key == "minioadmin"
+    assert settings.minio_secret_key == "minioadmin"
+    assert settings.minio_bucket == "knowledge-files"
+    assert settings.minio_secure is False
+    assert settings.local_storage_path == ".storage"
+    assert settings.knowledge_upload_max_bytes == 10485760
     assert settings.knowledge_chunk_size == DEFAULT_KNOWLEDGE_CHUNK_SIZE
     assert settings.knowledge_chunk_overlap == DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     assert settings.retriever_type == "vector"
@@ -362,6 +371,30 @@ def test_get_settings_uses_configured_app_and_supabase_values(
     )
 
 
+def test_get_settings_uses_configured_storage_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE_PROVIDER", "local")
+    monkeypatch.setenv("LOCAL_STORAGE_PATH", "custom-storage")
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio.internal:9000")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "custom-user")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "custom-pass")
+    monkeypatch.setenv("MINIO_BUCKET", "custom-bucket")
+    monkeypatch.setenv("MINIO_SECURE", "true")
+    monkeypatch.setenv("KNOWLEDGE_UPLOAD_MAX_BYTES", "2048")
+
+    settings = get_settings()
+
+    assert settings.storage_provider == "local"
+    assert settings.local_storage_path == "custom-storage"
+    assert settings.minio_endpoint == "http://minio.internal:9000"
+    assert settings.minio_access_key == "custom-user"
+    assert settings.minio_secret_key == "custom-pass"
+    assert settings.minio_bucket == "custom-bucket"
+    assert settings.minio_secure is True
+    assert settings.knowledge_upload_max_bytes == 2048
+
+
 def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -405,6 +438,7 @@ def test_get_settings_uses_runtime_database_url_for_migrations_when_direct_url_i
         ("QUERY_REWRITE_MAX_TOKENS", "0", "QUERY_REWRITE_MAX_TOKENS must be greater than 0."),
         ("RERANKER_INITIAL_TOP_K", "0", "RERANKER_INITIAL_TOP_K must be greater than 0."),
         ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
+        ("KNOWLEDGE_UPLOAD_MAX_BYTES", "0", "KNOWLEDGE_UPLOAD_MAX_BYTES must be greater than 0."),
         ("RESPONSE_CACHE_TTL_SECONDS", "0", "RESPONSE_CACHE_TTL_SECONDS must be greater than 0."),
         ("RESPONSE_CACHE_MAX_RESULTS", "0", "RESPONSE_CACHE_MAX_RESULTS must be greater than 0."),
         ("CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES", "0", "CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES must be greater than 0."),
@@ -492,6 +526,19 @@ def test_get_settings_rejects_invalid_vector_store_provider(
     with pytest.raises(
         ValueError,
         match=f"VECTOR_STORE_PROVIDER must be one of: {supported_values}.",
+    ):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_storage_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE_PROVIDER", "s3")
+
+    supported_values = ", ".join(sorted(SUPPORTED_STORAGE_PROVIDERS))
+    with pytest.raises(
+        ValueError,
+        match=f"STORAGE_PROVIDER must be one of: {supported_values}.",
     ):
         get_settings()
 
