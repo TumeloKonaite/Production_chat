@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from sqlalchemy.orm import Session
 
@@ -20,17 +21,16 @@ class IngestionResult:
     chunk_count: int
 
 
-def ingest_knowledge(
+def ingest_documents(
     session: Session,
     retrieval_service: RetrievalService,
     *,
-    source_dir: Path | None = None,
+    documents: Sequence[SourceDocument],
     ingested_at: datetime | None = None,
     chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
 ) -> tuple[list[SourceDocument], list[IngestionResult]]:
     repository = KnowledgeRepository(session)
-    documents = load_source_documents(source_dir)
     # Use one ingestion timestamp across the full run so all replaced chunks can
     # be traced back to the same refresh operation.
     ingestion_time = ingested_at or datetime.now(timezone.utc)
@@ -45,6 +45,8 @@ def ingest_knowledge(
             source=document.source,
             text=cleaned_text,
             updated_at=document.updated_at,
+            chunk_source_type=document.chunk_source_type,
+            metadata=dict(document.metadata),
         )
 
         # Chunk the cleaned document, then replace any previously stored chunks
@@ -63,4 +65,24 @@ def ingest_knowledge(
         results.append(IngestionResult(source=document.source, chunk_count=len(chunks)))
 
     retrieval_service.replace_all_chunks(indexed_chunks)
-    return documents, results
+    return list(documents), results
+
+
+def ingest_knowledge(
+    session: Session,
+    retrieval_service: RetrievalService,
+    *,
+    source_dir: Path | None = None,
+    ingested_at: datetime | None = None,
+    chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
+) -> tuple[list[SourceDocument], list[IngestionResult]]:
+    documents = load_source_documents(source_dir)
+    return ingest_documents(
+        session,
+        retrieval_service,
+        documents=documents,
+        ingested_at=ingested_at,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )

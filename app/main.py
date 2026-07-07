@@ -16,7 +16,13 @@ from app.api.tavus import router as tavus_router
 from app.config import Settings, get_settings
 from app.infrastructure.llm import UnknownModelError
 from app.infrastructure.prompts import UnknownPromptVersionError
-from app.knowledge.ingestion import KnowledgeIngestionServiceError
+from app.knowledge.ingestion import (
+    KnowledgeIngestionConflictError,
+    KnowledgeIngestionGoneError,
+    KnowledgeIngestionNotFoundError,
+    KnowledgeIngestionServiceError,
+    KnowledgeIngestionValidationError,
+)
 from app.services.chat import (
     ChatPersistenceError,
     ChatServiceError,
@@ -207,6 +213,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unable to ingest knowledge. Please try again."},
+        )
+
+    @app.exception_handler(KnowledgeIngestionValidationError)
+    async def handle_knowledge_ingestion_validation_error(
+        _: Request,
+        exc: KnowledgeIngestionValidationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(KnowledgeIngestionNotFoundError)
+    async def handle_knowledge_ingestion_not_found(
+        _: Request,
+        exc: KnowledgeIngestionNotFoundError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(KnowledgeIngestionConflictError)
+    async def handle_knowledge_ingestion_conflict(
+        _: Request,
+        exc: KnowledgeIngestionConflictError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(KnowledgeIngestionGoneError)
+    async def handle_knowledge_ingestion_gone(
+        _: Request,
+        exc: KnowledgeIngestionGoneError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_410_GONE,
+            content={"detail": str(exc)},
         )
 
     @app.exception_handler(KnowledgeFileValidationError)

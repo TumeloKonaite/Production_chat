@@ -45,17 +45,20 @@ def ingest_knowledge_endpoint(
     effective_settings = _resolve_effective_settings(settings=settings, request=payload)
     ingestion_service = ingestion_service_factory(effective_settings)
     with _ingestion_tracking_run(settings=effective_settings, request=payload):
-        result = ingestion_service.run(session)
+        result = ingestion_service.run(session, request=payload)
 
-    chunks_created = sum(document_result.chunk_count for document_result in result.results)
     return KnowledgeIngestionResponse(
         status=result.status,
+        source_type=result.source_type,
+        file_id=result.file_id,
         experiment_name=payload.experiment_name,
         embedding_provider=effective_settings.embedding_provider,
         embedding_model=effective_settings.knowledge_embedding_model,
         embedding_dimension=effective_settings.embedding_dimension,
         documents_loaded=result.documents_loaded,
-        chunks_created=chunks_created,
+        chunks_created=result.chunks_created,
+        chunks_updated=result.chunks_updated,
+        chunks_skipped=result.chunks_skipped,
         results=[
             KnowledgeIngestionDocumentResponse(
                 source=document_result.source,

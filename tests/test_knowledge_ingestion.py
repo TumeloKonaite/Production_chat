@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session as SASession
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.api.knowledge.schemas import KnowledgeIngestionRequest
+from app.infrastructure.storage import StorageError
 from app.knowledge.ingestion import (
+    KnowledgeIngestionConflictError,
+    KnowledgeIngestionServiceError,
+    KnowledgeIngestionValidationError,
     KnowledgeIngestionService,
+    UploadedKnowledgeFileLoader,
     chunk_markdown_document,
     clean_markdown_text,
     ingest_knowledge,
@@ -15,7 +25,7 @@ from app.knowledge.ingestion import (
 )
 from app.knowledge.ingestion.loader import SourceDocument
 from app.repositories.db.base import Base
-from app.repositories.models import KnowledgeChunk
+from app.repositories.models import KnowledgeChunk, KnowledgeFile
 from app.repositories.knowledge_repository import KnowledgeRepository
 
 
@@ -24,10 +34,10 @@ def utcnow() -> datetime:
 
 
 def build_session_factory(tmp_path) -> sessionmaker[Session]:
-    database_path = tmp_path / "test_knowledge.db"
     engine = create_engine(
-        f"sqlite:///{database_path}",
+        "sqlite://",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         future=True,
     )
     Base.metadata.create_all(engine)
@@ -51,6 +61,52 @@ class FakeRetrievalService:
 
     def replace_all_chunks(self, chunks: list[KnowledgeChunk]) -> None:
         self.replaced_chunk_ids = [chunk.id for chunk in chunks]
+
+
+class MappingStorage:
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self._files = files
+
+    def upload_file(
+        self,
+        *,
+        file_bytes: bytes,
+        storage_path: str,
+        content_type: str | None = None,
+    ):
+        raise AssertionError("upload_file should not be called during ingestion tests")
+
+    def download_file(self, *, storage_path: str) -> bytes:
+        if storage_path not in self._files:
+            raise StorageError("missing storage object") from FileNotFoundError(storage_path)
+        return self._files[storage_path]
+
+    def delete_file(self, *, storage_path: str) -> None:
+        self._files.pop(storage_path, None)
+
+
+def create_uploaded_knowledge_file(
+    session: SASession,
+    *,
+    filename: str,
+    storage_path: str | None = None,
+    status: str = "uploaded",
+) -> KnowledgeFile:
+    knowledge_file = KnowledgeFile(
+        id=str(uuid4()),
+        original_filename=filename,
+        content_type="text/markdown" if filename.endswith(".md") else "text/plain",
+        file_size_bytes=128,
+        storage_provider="local",
+        storage_bucket="knowledge-files",
+        storage_path=storage_path or f"uploads/{uuid4()}/{filename}",
+        checksum="checksum",
+        status=status,
+    )
+    session.add(knowledge_file)
+    session.commit()
+    session.refresh(knowledge_file)
+    return knowledge_file
 
 
 def test_loader_reads_markdown_documents(tmp_path) -> None:
@@ -201,8 +257,219 @@ def test_knowledge_ingestion_service_returns_summary(tmp_path) -> None:
         result = ingestion_service.run(session)
 
     assert result.status == "ok"
+    assert result.source_type == "local_directory"
+    assert result.file_id is None
     assert result.documents_loaded == 2
+    assert result.chunks_created == 2
+    assert result.chunks_updated == 0
+    assert result.chunks_skipped == 0
     assert [(item.source, item.chunk_count) for item in result.results] == [
         ("profile.md", 1),
         ("projects.md", 1),
     ]
+
+
+def test_knowledge_ingestion_service_ingests_uploaded_markdown_file(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            storage_path="uploaded/company-profile.md",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage(
+                    {"uploaded/company-profile.md": b"# Company\n\nGrounded answers.\n"}
+                )
+            ),
+        )
+
+        result = ingestion_service.run(
+            session,
+            request=KnowledgeIngestionRequest(
+                source_type="uploaded_file",
+                file_id=UUID(knowledge_file.id),
+            ),
+        )
+        repository = KnowledgeRepository(session)
+        stored_chunks = list(repository.list_all())
+        refreshed_file = session.get(KnowledgeFile, knowledge_file.id)
+
+    assert result.status == "ingested"
+    assert result.source_type == "uploaded_file"
+    assert result.file_id == knowledge_file.id
+    assert result.documents_loaded == 1
+    assert result.chunks_created == 1
+    assert [(item.source, item.chunk_count) for item in result.results] == [
+        ("company-profile.md", 1)
+    ]
+    assert len(stored_chunks) == 1
+    assert stored_chunks[0].source == "uploaded/company-profile.md"
+    assert stored_chunks[0].source_type == "uploaded_file"
+    assert stored_chunks[0].chunk_metadata["file_id"] == knowledge_file.id
+    assert stored_chunks[0].chunk_metadata["original_filename"] == "company-profile.md"
+    assert stored_chunks[0].chunk_metadata["storage_provider"] == "local"
+    assert stored_chunks[0].chunk_metadata["storage_bucket"] == "knowledge-files"
+    assert stored_chunks[0].chunk_metadata["storage_path"] == "uploaded/company-profile.md"
+    assert refreshed_file is not None
+    assert refreshed_file.status == "ingested"
+    assert refreshed_file.ingested_at is not None
+
+
+def test_knowledge_ingestion_service_ingests_uploaded_text_file(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="notes.txt",
+            storage_path="uploaded/notes.txt",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({"uploaded/notes.txt": b"Operational notes"})
+            ),
+        )
+
+        result = ingestion_service.run(
+            session,
+            request=KnowledgeIngestionRequest(
+                source_type="uploaded_file",
+                file_id=UUID(knowledge_file.id),
+            ),
+        )
+        repository = KnowledgeRepository(session)
+        stored_chunks = list(repository.list_all())
+
+    assert result.status == "ingested"
+    assert result.chunks_created == 1
+    assert len(stored_chunks) == 1
+    assert stored_chunks[0].chunk_metadata["content_type"] == "text"
+    assert stored_chunks[0].section == "Document"
+
+
+def test_knowledge_ingestion_service_rejects_already_ingesting_uploaded_file(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            status="ingesting",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+        )
+
+        with pytest.raises(
+            KnowledgeIngestionConflictError,
+            match="already being ingested",
+        ):
+            ingestion_service.run(
+                session,
+                request=KnowledgeIngestionRequest(
+                    source_type="uploaded_file",
+                    file_id=UUID(knowledge_file.id),
+                ),
+            )
+
+
+def test_knowledge_ingestion_service_rejects_already_ingested_uploaded_file(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            status="ingested",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+        )
+
+        with pytest.raises(
+            KnowledgeIngestionConflictError,
+            match="already been ingested",
+        ):
+            ingestion_service.run(
+                session,
+                request=KnowledgeIngestionRequest(
+                    source_type="uploaded_file",
+                    file_id=UUID(knowledge_file.id),
+                ),
+            )
+
+
+def test_knowledge_ingestion_service_marks_missing_storage_object_as_failed(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            storage_path="uploaded/missing.md",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+        )
+
+        with pytest.raises(KnowledgeIngestionServiceError, match="Storage object not found."):
+            ingestion_service.run(
+                session,
+                request=KnowledgeIngestionRequest(
+                    source_type="uploaded_file",
+                    file_id=UUID(knowledge_file.id),
+                ),
+            )
+
+        refreshed_file = session.get(KnowledgeFile, knowledge_file.id)
+
+    assert refreshed_file is not None
+    assert refreshed_file.status == "failed"
+    assert refreshed_file.error_message == "Storage object not found."
+    assert refreshed_file.ingested_at is None
+
+
+def test_knowledge_ingestion_service_marks_decode_failure_as_failed(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            storage_path="uploaded/invalid.md",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({"uploaded/invalid.md": b"\xff\xfe\x00"})
+            ),
+        )
+
+        with pytest.raises(KnowledgeIngestionValidationError, match="valid UTF-8 text"):
+            ingestion_service.run(
+                session,
+                request=KnowledgeIngestionRequest(
+                    source_type="uploaded_file",
+                    file_id=UUID(knowledge_file.id),
+                ),
+            )
+
+        refreshed_file = session.get(KnowledgeFile, knowledge_file.id)
+
+    assert refreshed_file is not None
+    assert refreshed_file.status == "failed"
+    assert refreshed_file.error_message == "Uploaded knowledge files must be valid UTF-8 text."

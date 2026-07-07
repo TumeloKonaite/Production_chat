@@ -68,19 +68,23 @@ def chunk_markdown_document(
         section = _resolve_section_name(split_document.metadata)
         section_chunk_index = section_indexes.get(section, 0)
         section_indexes[section] = section_chunk_index + 1
+        content_type = document.metadata.get("content_type")
+        if not isinstance(content_type, str):
+            content_type = document.source.removesuffix(".md")
 
         metadata = {
+            **document.metadata,
             "chunk_index": global_chunk_index,
             "section_chunk_index": section_chunk_index,
             "source": document.source,
             "section": section,
-            "content_type": document.source.removesuffix(".md"),
+            "content_type": content_type,
             "source_updated_at": document.updated_at.isoformat(),
         }
         chunked_documents.append(
             ChunkedDocument(
                 source=document.source,
-                source_type="markdown",
+                source_type=document.chunk_source_type,
                 section=section,
                 content=content,
                 metadata=metadata,

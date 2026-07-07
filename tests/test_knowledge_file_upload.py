@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.api.dependencies.knowledge_dependencies import get_knowledge_file_upload_service
@@ -79,10 +80,10 @@ def build_test_settings(tmp_path: Path, **overrides: object) -> Settings:
 
 
 def build_session_factory(tmp_path: Path) -> sessionmaker[Session]:
-    database_path = tmp_path / "test_knowledge_file_upload.db"
     engine = create_engine(
-        f"sqlite:///{database_path}",
+        "sqlite://",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
         future=True,
     )
     Base.metadata.create_all(engine)

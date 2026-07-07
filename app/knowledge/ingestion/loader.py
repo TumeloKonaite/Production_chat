@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +12,8 @@ class SourceDocument:
     source: str
     text: str
     updated_at: datetime
+    chunk_source_type: str = "markdown"
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 def load_source_documents(source_dir: Path | None = None) -> list[SourceDocument]:
