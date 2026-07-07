@@ -66,6 +66,8 @@ def test_mlflow_client_uses_local_tracking_uri_when_dagshub_is_disabled() -> Non
     fake_mlflow = FakeMLflow()
     client = MLflowClient(
         tracking_uri="http://localhost:5000",
+        tracking_username=None,
+        tracking_password=None,
         enabled=True,
     )
     client._mlflow = fake_mlflow
@@ -89,6 +91,8 @@ def test_mlflow_client_initializes_dagshub_before_setting_experiment(monkeypatch
 
     client = MLflowClient(
         tracking_uri="http://localhost:5000",
+        tracking_username=None,
+        tracking_password=None,
         enabled=True,
         enable_dagshub_tracking=True,
         dagshub_repo_owner="acme",
@@ -116,6 +120,8 @@ def test_mlflow_client_raises_clear_error_when_dagshub_repo_owner_is_missing() -
     fake_mlflow = FakeMLflow()
     client = MLflowClient(
         tracking_uri=None,
+        tracking_username=None,
+        tracking_password=None,
         enabled=True,
         enable_dagshub_tracking=True,
         dagshub_repo_owner=None,

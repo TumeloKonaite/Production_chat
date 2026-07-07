@@ -15,6 +15,8 @@ def configure_tracking_backend(
     *,
     mlflow: Any,
     tracking_uri: str | None,
+    tracking_username: str | None,
+    tracking_password: str | None,
     enable_dagshub_tracking: bool,
     dagshub_repo_owner: str | None,
     dagshub_repo_name: str | None,
@@ -28,6 +30,10 @@ def configure_tracking_backend(
         )
         return
 
+    if tracking_username:
+        os.environ["MLFLOW_TRACKING_USERNAME"] = tracking_username
+    if tracking_password:
+        os.environ["MLFLOW_TRACKING_PASSWORD"] = tracking_password
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
 
@@ -45,6 +51,8 @@ def create_experiment_tracker(settings: Settings, experiment_name: str):
     return ExperimentTracker(
         MLflowClient(
             tracking_uri=settings.mlflow_tracking_uri,
+            tracking_username=settings.mlflow_tracking_username,
+            tracking_password=settings.mlflow_tracking_password,
             enabled=settings.enable_mlflow_tracking,
             enable_dagshub_tracking=settings.enable_dagshub_tracking,
             dagshub_repo_owner=settings.dagshub_repo_owner,

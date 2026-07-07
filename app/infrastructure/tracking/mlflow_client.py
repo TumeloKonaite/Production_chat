@@ -13,6 +13,8 @@ class MLflowClient:
         self,
         *,
         tracking_uri: str | None,
+        tracking_username: str | None,
+        tracking_password: str | None,
         enabled: bool,
         enable_dagshub_tracking: bool = False,
         dagshub_repo_owner: str | None = None,
@@ -20,6 +22,8 @@ class MLflowClient:
         dagshub_token: str | None = None,
     ) -> None:
         self._tracking_uri = tracking_uri
+        self._tracking_username = tracking_username
+        self._tracking_password = tracking_password
         self._enabled = enabled
         self._enable_dagshub_tracking = enable_dagshub_tracking
         self._dagshub_repo_owner = dagshub_repo_owner
@@ -43,6 +47,8 @@ class MLflowClient:
             configure_tracking_backend(
                 mlflow=mlflow,
                 tracking_uri=self._tracking_uri,
+                tracking_username=self._tracking_username,
+                tracking_password=self._tracking_password,
                 enable_dagshub_tracking=self._enable_dagshub_tracking,
                 dagshub_repo_owner=self._dagshub_repo_owner,
                 dagshub_repo_name=self._dagshub_repo_name,
