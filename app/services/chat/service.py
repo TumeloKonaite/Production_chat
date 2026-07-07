@@ -43,6 +43,7 @@ OBSERVABILITY_ENDPOINT_BY_CHANNEL = {
 @dataclass(frozen=True, slots=True)
 class ChatReply:
     conversation_id: str
+    message_id: str
     message: str
     model: str
     model_provider: str
@@ -327,11 +328,12 @@ class ChatService:
                 )
 
             # Only persist the assistant turn after the final response succeeds.
-            self._store_assistant_message(
+            assistant_message = self._store_assistant_message(
                 conversation=conversation,
                 llm_response=llm_response,
                 channel=channel,
                 message_metadata=message_metadata,
+                trace_id=trace_id,
             )
         except ConversationRepositoryError as exc:
             self._fail_trace(
@@ -380,6 +382,7 @@ class ChatService:
             latency_ms=total_latency_ms,
             channel=channel,
             message_metadata=message_metadata,
+            assistant_message_id=assistant_message.id,
         )
         self._complete_observability_trace(
             observability_trace,
@@ -391,6 +394,7 @@ class ChatService:
 
         return ChatReply(
             conversation_id=conversation.id,
+            message_id=assistant_message.id,
             message=llm_response.message,
             model=llm_response.model,
             model_provider=llm_response.model_provider,
@@ -636,9 +640,13 @@ class ChatService:
         llm_response: LLMGeneratedResponse,
         channel: str,
         message_metadata: dict[str, object],
-    ) -> None:
+        trace_id: str | None,
+    ):
+        assistant_message_metadata = dict(message_metadata)
+        if trace_id is not None:
+            assistant_message_metadata["trace_id"] = trace_id
         try:
-            self.repository.add_message(
+            return self.repository.add_message(
                 conversation=conversation,
                 role="assistant",
                 content=llm_response.message,
@@ -654,7 +662,7 @@ class ChatService:
                 output_tokens=llm_response.token_usage.output_tokens,
                 total_tokens=llm_response.token_usage.total_tokens,
                 estimated_cost_usd=llm_response.estimated_cost_usd,
-                message_metadata=message_metadata,
+                message_metadata=assistant_message_metadata,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
@@ -756,11 +764,14 @@ class ChatService:
         latency_ms: int,
         channel: str,
         message_metadata: dict[str, object],
+        assistant_message_id: str,
     ) -> None:
         if self.trace_service is None or trace_id is None:
             return
 
         try:
+            trace_metadata = self._build_trace_metadata(channel, message_metadata)
+            trace_metadata["assistant_message_id"] = assistant_message_id
             self.trace_service.complete_trace(
                 trace_id,
                 output_text=output_text,
@@ -776,7 +787,7 @@ class ChatService:
                 total_tokens=llm_response.token_usage.total_tokens,
                 estimated_cost_usd=llm_response.estimated_cost_usd,
                 latency_ms=latency_ms,
-                metadata=self._build_trace_metadata(channel, message_metadata),
+                metadata=trace_metadata,
             )
         except TraceServiceError:
             logger.warning("Trace completion failed.", exc_info=True)
