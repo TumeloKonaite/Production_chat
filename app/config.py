@@ -1,21 +1,31 @@
 from dataclasses import dataclass
 from functools import lru_cache
 import os
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
+
 from app.infrastructure.prompts import normalize_prompt_version
 
 # Load local development settings from `.env` without requiring callers to do it first.
 load_dotenv()
 
+DEFAULT_APP_ENV = "local"
+DEFAULT_LOCAL_FRONTEND_ORIGIN = "http://localhost:5173"
+DEFAULT_LOCAL_DATABASE_URL = (
+    "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot"
+)
+DEFAULT_LOCAL_REDIS_URL = "redis://localhost:6379/0"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
+SUPPORTED_APP_ENVS = frozenset({"local", "production", "test"})
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
+SUPPORTED_VECTOR_STORE_PROVIDERS = frozenset({"pgvector", "supabase_pgvector"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +62,15 @@ class Settings:
     dagshub_repo_owner: str | None
     dagshub_repo_name: str | None
     dagshub_token: str | None
+    app_env: str = DEFAULT_APP_ENV
+    frontend_origin: str | None = None
+    database_direct_url: str | None = None
+    vector_store_provider: str = "pgvector"
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
+    supabase_storage_bucket: str | None = None
+    mlflow_tracking_username: str | None = None
+    mlflow_tracking_password: str | None = None
     llm_provider: str = "openai"
     llm_model: str = "gpt-4.1-mini"
     llm_base_url: str = DEFAULT_OPENAI_BASE_URL
@@ -83,7 +102,8 @@ class Settings:
     allow_raw_production_text_in_evals: bool = False
     enable_response_cache: bool = False
     response_cache_provider: str = "redis"
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str | None = None
+    redis_token: str | None = None
     enable_exact_response_cache: bool = True
     enable_semantic_response_cache: bool = False
     response_cache_ttl_seconds: int = 604800
@@ -101,11 +121,50 @@ class Settings:
     chat_rate_limit_daily_token_budget: int = 100000
     chat_rate_limit_daily_cost_budget_usd: float = 0.50
 
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def frontend_origins(self) -> list[str]:
+        configured = self.frontend_origin
+        if configured is None and self.app_env != "production":
+            configured = DEFAULT_LOCAL_FRONTEND_ORIGIN
+        if configured is None:
+            return []
+        return [value.strip() for value in configured.split(",") if value.strip()]
+
+    @property
+    def resolved_redis_url(self) -> str | None:
+        if self.redis_url is None:
+            return None
+        return _inject_redis_token(self.redis_url, self.redis_token)
+
+    @property
+    def redis_configured(self) -> bool:
+        return self.resolved_redis_url is not None
+
+    @property
+    def supabase_configured(self) -> bool:
+        return bool(self.supabase_url and self.supabase_service_role_key)
+
+    @property
+    def openai_base_url_configured(self) -> bool:
+        return bool(self.llm_base_url.strip())
+
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _get_first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None:
+            return value
+    return None
 
 
 def _get_non_empty_env(*names: str, default: str | None = None) -> str | None:
@@ -167,42 +226,15 @@ def _get_optional_float_env(name: str, *, minimum: float | None = None) -> float
     return value
 
 
-def _get_retriever_type_env(name: str, default: str) -> str:
+def _get_choice_env(name: str, default: str, *, supported_values: frozenset[str]) -> str:
     raw_value = os.getenv(name)
     if raw_value is None or not raw_value.strip():
         return default
 
     value = raw_value.strip().casefold()
-    if value not in SUPPORTED_RETRIEVER_TYPES:
-        supported_values = ", ".join(sorted(SUPPORTED_RETRIEVER_TYPES))
-        raise ValueError(f"{name} must be one of: {supported_values}.")
-
-    return value
-
-
-def _get_reranker_type_env(name: str, default: str) -> str:
-    raw_value = os.getenv(name)
-    if raw_value is None or not raw_value.strip():
-        return default
-
-    value = raw_value.strip().casefold()
-    if value not in SUPPORTED_RERANKER_TYPES:
-        supported_values = ", ".join(sorted(SUPPORTED_RERANKER_TYPES))
-        raise ValueError(f"{name} must be one of: {supported_values}.")
-
-    return value
-
-
-def _get_response_cache_provider_env(name: str, default: str) -> str:
-    raw_value = os.getenv(name)
-    if raw_value is None or not raw_value.strip():
-        return default
-
-    value = raw_value.strip().casefold()
-    if value not in SUPPORTED_RESPONSE_CACHE_PROVIDERS:
-        supported_values = ", ".join(sorted(SUPPORTED_RESPONSE_CACHE_PROVIDERS))
-        raise ValueError(f"{name} must be one of: {supported_values}.")
-
+    if value not in supported_values:
+        supported = ", ".join(sorted(supported_values))
+        raise ValueError(f"{name} must be one of: {supported}.")
     return value
 
 
@@ -240,9 +272,47 @@ def _get_llm_provider(default_model_config_id: str | None) -> str:
     return provider
 
 
+def _inject_redis_token(redis_url: str, redis_token: str | None) -> str:
+    if redis_token is None or "@" in redis_url:
+        return redis_url
+
+    parsed = urlsplit(redis_url)
+    if not parsed.scheme or not parsed.hostname:
+        return redis_url
+
+    username = parsed.username or "default"
+    hostname = parsed.hostname
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    netloc = f"{username}:{quote(redis_token, safe='')}@{hostname}{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _validate_production_requirements(
+    *,
+    app_env: str,
+    database_url: str | None,
+    llm_api_key: str | None,
+) -> None:
+    if app_env != "production":
+        return
+    if database_url is None:
+        raise ValueError("DATABASE_URL is required when APP_ENV=production.")
+    if llm_api_key is None:
+        raise ValueError(
+            "LLM_API_KEY or OPENAI_API_KEY must be set when APP_ENV=production."
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
     # Cache config so dependency injection reuses the same resolved settings object.
+    app_env = _get_choice_env(
+        "APP_ENV",
+        DEFAULT_APP_ENV,
+        supported_values=SUPPORTED_APP_ENVS,
+    )
     configured_model_config_id = _get_non_empty_env("DEFAULT_MODEL_CONFIG_ID")
     configured_llm_provider = _get_non_empty_env("LLM_PROVIDER")
     configured_llm_model = _get_non_empty_env("LLM_MODEL")
@@ -303,6 +373,15 @@ def get_settings() -> Settings:
     llm_base_url = openai_base_url if llm_provider == "openai" else openrouter_base_url
     llm_api_key = openai_api_key if llm_provider == "openai" else openrouter_api_key
 
+    database_url = _get_non_empty_env("DATABASE_URL")
+    if database_url is None and app_env != "production":
+        database_url = DEFAULT_LOCAL_DATABASE_URL
+    _validate_production_requirements(
+        app_env=app_env,
+        database_url=database_url,
+        llm_api_key=llm_api_key,
+    )
+
     knowledge_chunk_size = _get_int_env(
         "CHUNK_SIZE",
         DEFAULT_KNOWLEDGE_CHUNK_SIZE,
@@ -316,20 +395,32 @@ def get_settings() -> Settings:
     if knowledge_chunk_overlap >= knowledge_chunk_size:
         raise ValueError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
 
+    vector_store_provider = _get_choice_env(
+        "VECTOR_STORE_PROVIDER",
+        "pgvector",
+        supported_values=SUPPORTED_VECTOR_STORE_PROVIDERS,
+    )
+    supabase_url = _get_non_empty_env("SUPABASE_URL")
+    supabase_service_role_key = _get_non_empty_env("SUPABASE_SERVICE_ROLE_KEY")
+    if vector_store_provider == "supabase_pgvector" and supabase_url is None:
+        raise ValueError(
+            "SUPABASE_URL is required when VECTOR_STORE_PROVIDER=supabase_pgvector."
+        )
+    if vector_store_provider == "supabase_pgvector" and supabase_service_role_key is None:
+        raise ValueError(
+            "SUPABASE_SERVICE_ROLE_KEY is required when VECTOR_STORE_PROVIDER=supabase_pgvector."
+        )
+
     enable_langfuse_observability = _parse_bool(
-        os.getenv("ENABLE_LANGFUSE_OBSERVABILITY"),
+        _get_first_env("ENABLE_LANGFUSE", "ENABLE_LANGFUSE_OBSERVABILITY"),
         default=False,
     )
     langfuse_public_key = _get_non_empty_env("LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key = _get_non_empty_env("LANGFUSE_SECRET_KEY")
     if enable_langfuse_observability and langfuse_public_key is None:
-        raise ValueError(
-            "LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true."
-        )
+        raise ValueError("LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE=true.")
     if enable_langfuse_observability and langfuse_secret_key is None:
-        raise ValueError(
-            "LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true."
-        )
+        raise ValueError("LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE=true.")
     langfuse_sample_rate = _get_float_env(
         "LANGFUSE_SAMPLE_RATE",
         1.0,
@@ -354,9 +445,10 @@ def get_settings() -> Settings:
         os.getenv("ENABLE_RESPONSE_CACHE"),
         default=False,
     )
-    response_cache_provider = _get_response_cache_provider_env(
+    response_cache_provider = _get_choice_env(
         "RESPONSE_CACHE_PROVIDER",
         "redis",
+        supported_values=SUPPORTED_RESPONSE_CACHE_PROVIDERS,
     )
     response_cache_ttl_seconds = _get_int_env(
         "RESPONSE_CACHE_TTL_SECONDS",
@@ -413,11 +505,15 @@ def get_settings() -> Settings:
         minimum=0.0,
     )
 
+    redis_url = _get_non_empty_env("REDIS_URL")
+    if redis_url is None and app_env != "production":
+        redis_url = DEFAULT_LOCAL_REDIS_URL
+
     return Settings(
-        database_url=os.getenv(
-            "DATABASE_URL",
-            "postgresql+psycopg://postgres:postgres@127.0.0.1:5434/production_chatbot",
-        ),
+        app_env=app_env,
+        frontend_origin=_get_non_empty_env("FRONTEND_ORIGIN"),
+        database_url=database_url or DEFAULT_LOCAL_DATABASE_URL,
+        database_direct_url=_get_non_empty_env("DATABASE_DIRECT_URL"),
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
         openrouter_api_key=openrouter_api_key,
@@ -447,15 +543,25 @@ def get_settings() -> Settings:
             )
         ),
         conversation_history_limit=int(os.getenv("CONVERSATION_HISTORY_LIMIT", "10")),
-        retriever_type=_get_retriever_type_env("RETRIEVER_TYPE", "vector"),
+        retriever_type=_get_choice_env(
+            "RETRIEVER_TYPE",
+            "vector",
+            supported_values=SUPPORTED_RETRIEVER_TYPES,
+        ),
         retrieval_top_k=_get_int_env("RETRIEVAL_TOP_K", 5, minimum=1),
         retrieval_min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.55")),
         default_retrieval_config=os.getenv("DEFAULT_RETRIEVAL_CONFIG", "default"),
+        vector_store_provider=vector_store_provider,
+        supabase_url=supabase_url,
+        supabase_service_role_key=supabase_service_role_key,
+        supabase_storage_bucket=_get_non_empty_env("SUPABASE_STORAGE_BUCKET"),
         enable_mlflow_tracking=_parse_bool(
             os.getenv("ENABLE_MLFLOW_TRACKING"),
-            default=True,
+            default=False,
         ),
-        mlflow_tracking_uri=os.getenv("MLFLOW_TRACKING_URI"),
+        mlflow_tracking_uri=_get_non_empty_env("MLFLOW_TRACKING_URI"),
+        mlflow_tracking_username=_get_non_empty_env("MLFLOW_TRACKING_USERNAME"),
+        mlflow_tracking_password=_get_non_empty_env("MLFLOW_TRACKING_PASSWORD"),
         mlflow_experiment_name=os.getenv(
             "MLFLOW_EXPERIMENT_NAME",
             "personal-chatbot-model-comparison",
@@ -511,7 +617,11 @@ def get_settings() -> Settings:
             os.getenv("ENABLE_RERANKING"),
             default=False,
         ),
-        reranker_type=_get_reranker_type_env("RERANKER_TYPE", "none"),
+        reranker_type=_get_choice_env(
+            "RERANKER_TYPE",
+            "none",
+            supported_values=SUPPORTED_RERANKER_TYPES,
+        ),
         reranker_model=(
             _get_non_empty_env("RERANKER_MODEL", default="openai:gpt-4.1-mini")
             or "openai:gpt-4.1-mini"
@@ -534,7 +644,7 @@ def get_settings() -> Settings:
             or "https://cloud.langfuse.com"
         ).rstrip("/"),
         langfuse_environment=(
-            _get_non_empty_env("LANGFUSE_ENVIRONMENT", default="local") or "local"
+            _get_non_empty_env("LANGFUSE_ENVIRONMENT", default=app_env) or app_env
         ),
         langfuse_release=_get_non_empty_env("LANGFUSE_RELEASE"),
         langfuse_sample_rate=langfuse_sample_rate,
@@ -543,10 +653,8 @@ def get_settings() -> Settings:
         allow_raw_production_text_in_evals=allow_raw_production_text_in_evals,
         enable_response_cache=enable_response_cache,
         response_cache_provider=response_cache_provider,
-        redis_url=(
-            _get_non_empty_env("REDIS_URL", default="redis://localhost:6379/0")
-            or "redis://localhost:6379/0"
-        ),
+        redis_url=redis_url,
+        redis_token=_get_non_empty_env("REDIS_TOKEN"),
         enable_exact_response_cache=_parse_bool(
             os.getenv("ENABLE_EXACT_RESPONSE_CACHE"),
             default=True,

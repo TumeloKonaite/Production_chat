@@ -1,3 +1,6 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,6 +9,7 @@ from app.api.chat import router as chat_router
 from app.api.evals import router as evals_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tavus import router as tavus_router
+from app.config import Settings, get_settings
 from app.infrastructure.llm import UnknownModelError
 from app.infrastructure.prompts import UnknownPromptVersionError
 from app.knowledge.ingestion import KnowledgeIngestionServiceError
@@ -29,12 +33,30 @@ from app.services.rate_limiting import (
 from app.services.retrieval import EmbeddingConfigurationError, VectorIndexConfigurationError
 from app.services.tavus import TavusConfigurationError, TavusServiceError
 
+logger = logging.getLogger(__name__)
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Production Chatbot")
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI, settings: Settings):
+    logger.info("App environment: %s", settings.app_env)
+    logger.info("Vector store provider: %s", settings.vector_store_provider)
+    logger.info("Langfuse enabled: %s", settings.enable_langfuse_observability)
+    logger.info("MLflow tracking enabled: %s", settings.enable_mlflow_tracking)
+    logger.info("Redis configured: %s", settings.redis_configured)
+    logger.info("Supabase configured: %s", settings.supabase_configured)
+    logger.info("OpenAI base URL configured: %s", settings.openai_base_url_configured)
+    yield
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    resolved_settings = settings or get_settings()
+    app = FastAPI(
+        title="Production Chatbot",
+        lifespan=lambda app: _lifespan(app, resolved_settings),
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=resolved_settings.frontend_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],

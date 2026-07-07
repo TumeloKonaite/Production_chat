@@ -76,7 +76,7 @@ class RetrievalService:
     def vector_store_name(self) -> str | None:
         if self._retriever_type not in {"vector", "hybrid"}:
             return None
-        return "pgvector"
+        return self._settings.vector_store_provider
 
     @property
     def vectorstore(self) -> Any:

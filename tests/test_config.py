@@ -5,14 +5,17 @@ from collections.abc import Generator
 import pytest
 
 from app.config import (
+    DEFAULT_LOCAL_FRONTEND_ORIGIN,
     DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
+    SUPPORTED_APP_ENVS,
     SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_RERANKER_TYPES,
     SUPPORTED_RESPONSE_CACHE_PROVIDERS,
     SUPPORTED_RETRIEVER_TYPES,
+    SUPPORTED_VECTOR_STORE_PROVIDERS,
     get_settings,
 )
 
@@ -70,11 +73,16 @@ def test_get_settings_uses_generic_llm_provider_configuration(
 
 
 def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
+    monkeypatch.delenv("DATABASE_DIRECT_URL", raising=False)
+    monkeypatch.delenv("VECTOR_STORE_PROVIDER", raising=False)
     monkeypatch.delenv("CHUNK_SIZE", raising=False)
     monkeypatch.delenv("CHUNK_OVERLAP", raising=False)
     monkeypatch.delenv("RETRIEVER_TYPE", raising=False)
     monkeypatch.delenv("RETRIEVAL_TOP_K", raising=False)
     monkeypatch.delenv("EVAL_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("ENABLE_LANGFUSE", raising=False)
     monkeypatch.delenv("ENABLE_LANGFUSE_OBSERVABILITY", raising=False)
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
@@ -86,6 +94,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("ENABLE_RESPONSE_CACHE", raising=False)
     monkeypatch.delenv("RESPONSE_CACHE_PROVIDER", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_TOKEN", raising=False)
     monkeypatch.delenv("ENABLE_EXACT_RESPONSE_CACHE", raising=False)
     monkeypatch.delenv("ENABLE_SEMANTIC_RESPONSE_CACHE", raising=False)
     monkeypatch.delenv("RESPONSE_CACHE_TTL_SECONDS", raising=False)
@@ -105,6 +114,11 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
 
     settings = get_settings()
 
+    assert settings.app_env == "local"
+    assert settings.frontend_origin is None
+    assert settings.frontend_origins == [DEFAULT_LOCAL_FRONTEND_ORIGIN]
+    assert settings.database_direct_url is None
+    assert settings.vector_store_provider == "pgvector"
     assert settings.knowledge_chunk_size == DEFAULT_KNOWLEDGE_CHUNK_SIZE
     assert settings.knowledge_chunk_overlap == DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     assert settings.retriever_type == "vector"
@@ -134,6 +148,8 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.enable_response_cache is False
     assert settings.response_cache_provider == "redis"
     assert settings.redis_url == "redis://localhost:6379/0"
+    assert settings.redis_token is None
+    assert settings.resolved_redis_url == "redis://localhost:6379/0"
     assert settings.enable_exact_response_cache is True
     assert settings.enable_semantic_response_cache is False
     assert settings.response_cache_ttl_seconds == 604800
@@ -205,7 +221,7 @@ def test_get_settings_uses_configured_reranker_values(
 def test_get_settings_uses_configured_langfuse_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
     monkeypatch.setenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com/")
@@ -244,6 +260,7 @@ def test_get_settings_uses_configured_response_cache_values(
     monkeypatch.setenv("ENABLE_RESPONSE_CACHE", "true")
     monkeypatch.setenv("RESPONSE_CACHE_PROVIDER", "redis")
     monkeypatch.setenv("REDIS_URL", "redis://cache.internal:6379/2")
+    monkeypatch.setenv("REDIS_TOKEN", "upstash-token")
     monkeypatch.setenv("ENABLE_EXACT_RESPONSE_CACHE", "false")
     monkeypatch.setenv("ENABLE_SEMANTIC_RESPONSE_CACHE", "true")
     monkeypatch.setenv("RESPONSE_CACHE_TTL_SECONDS", "3600")
@@ -259,6 +276,8 @@ def test_get_settings_uses_configured_response_cache_values(
     assert settings.enable_response_cache is True
     assert settings.response_cache_provider == "redis"
     assert settings.redis_url == "redis://cache.internal:6379/2"
+    assert settings.redis_token == "upstash-token"
+    assert settings.resolved_redis_url == "redis://default:upstash-token@cache.internal:6379/2"
     assert settings.enable_exact_response_cache is False
     assert settings.enable_semantic_response_cache is True
     assert settings.response_cache_ttl_seconds == 3600
@@ -290,6 +309,56 @@ def test_get_settings_uses_configured_rate_limiting_values(
     assert settings.chat_rate_limit_concurrent_requests == 2
     assert settings.chat_rate_limit_daily_token_budget == 9000
     assert settings.chat_rate_limit_daily_cost_budget_usd == 1.25
+
+
+def test_get_settings_uses_configured_app_and_supabase_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com, https://admin.example.com")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:secret@db.example.com:5432/app")
+    monkeypatch.setenv("DATABASE_DIRECT_URL", "postgresql+psycopg://postgres:secret@db-direct.example.com:5432/app")
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "supabase_pgvector")
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SUPABASE_STORAGE_BUCKET", "knowledge-base")
+    monkeypatch.setenv("MLFLOW_TRACKING_USERNAME", "mlflow-user")
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "mlflow-pass")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_TOKEN", raising=False)
+
+    settings = get_settings()
+
+    assert settings.app_env == "production"
+    assert settings.frontend_origins == [
+        "https://frontend.example.com",
+        "https://admin.example.com",
+    ]
+    assert settings.database_direct_url == (
+        "postgresql+psycopg://postgres:secret@db-direct.example.com:5432/app"
+    )
+    assert settings.vector_store_provider == "supabase_pgvector"
+    assert settings.supabase_url == "https://project.supabase.co"
+    assert settings.supabase_service_role_key == "service-role"
+    assert settings.supabase_storage_bucket == "knowledge-base"
+    assert settings.supabase_configured is True
+    assert settings.redis_url is None
+    assert settings.mlflow_tracking_username == "mlflow-user"
+    assert settings.mlflow_tracking_password == "mlflow-pass"
+
+
+def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:secret@db.example.com:5432/app")
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+
+    settings = get_settings()
+
+    assert settings.frontend_origin is None
+    assert settings.frontend_origins == []
 
 
 @pytest.mark.parametrize(
@@ -372,6 +441,29 @@ def test_get_settings_rejects_invalid_llm_provider(
         get_settings()
 
 
+def test_get_settings_rejects_invalid_app_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "staging")
+
+    supported_values = ", ".join(sorted(SUPPORTED_APP_ENVS))
+    with pytest.raises(ValueError, match=f"APP_ENV must be one of: {supported_values}."):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_vector_store_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "pinecone")
+
+    supported_values = ", ".join(sorted(SUPPORTED_VECTOR_STORE_PROVIDERS))
+    with pytest.raises(
+        ValueError,
+        match=f"VECTOR_STORE_PROVIDER must be one of: {supported_values}.",
+    ):
+        get_settings()
+
+
 def test_get_settings_rejects_chunk_overlap_that_is_not_smaller_than_chunk_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -409,13 +501,13 @@ def test_get_settings_rejects_response_cache_distance_threshold_above_two(
 def test_get_settings_requires_langfuse_public_key_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
 
     with pytest.raises(
         ValueError,
-        match="LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true.",
+        match="LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE=true.",
     ):
         get_settings()
 
@@ -423,12 +515,52 @@ def test_get_settings_requires_langfuse_public_key_when_enabled(
 def test_get_settings_requires_langfuse_secret_key_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
 
     with pytest.raises(
         ValueError,
-        match="LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE_OBSERVABILITY=true.",
+        match="LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE=true.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_database_url_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="DATABASE_URL is required when APP_ENV=production."):
+        get_settings()
+
+
+def test_get_settings_requires_llm_api_key_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:secret@db.example.com:5432/app")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="LLM_API_KEY or OPENAI_API_KEY must be set when APP_ENV=production.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_supabase_credentials_for_supabase_pgvector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "supabase_pgvector")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="SUPABASE_URL is required when VECTOR_STORE_PROVIDER=supabase_pgvector.",
     ):
         get_settings()

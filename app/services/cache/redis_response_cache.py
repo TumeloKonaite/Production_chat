@@ -265,10 +265,14 @@ class RedisResponseCache(ResponseCache):
     def _get_redis_client(self) -> Any | None:
         if self._redis_client is not None:
             return self._redis_client
+        redis_url = self._settings.resolved_redis_url
+        if redis_url is None:
+            logger.info("Response cache Redis usage skipped because REDIS_URL is not configured.")
+            return None
         try:
             redis_asyncio = import_module("redis.asyncio")
             self._redis_client = redis_asyncio.from_url(
-                self._settings.redis_url,
+                redis_url,
                 decode_responses=True,
             )
         except Exception:
@@ -282,6 +286,9 @@ class RedisResponseCache(ResponseCache):
         if self._semantic_cache_unavailable_reason is not None:
             return None
         if self._embedding_provider is None:
+            return None
+        redis_url = self._settings.resolved_redis_url
+        if redis_url is None:
             return None
 
         try:
@@ -297,7 +304,7 @@ class RedisResponseCache(ResponseCache):
                 filterable_fields=[
                     {"name": "metadata_scope_hash", "type": "tag"},
                 ],
-                redis_url=self._settings.redis_url,
+                redis_url=redis_url,
             )
         except Exception as exc:
             if self._is_redisearch_unavailable_error(exc):
