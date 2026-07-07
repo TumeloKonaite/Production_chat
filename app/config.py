@@ -78,6 +78,8 @@ class Settings:
     langfuse_release: str | None = None
     langfuse_sample_rate: float = 1.0
     langfuse_export_default_limit: int = 100
+    enable_production_feedback_export: bool = False
+    allow_raw_production_text_in_evals: bool = False
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -307,6 +309,14 @@ def get_settings() -> Settings:
         100,
         minimum=1,
     )
+    enable_production_feedback_export = _parse_bool(
+        os.getenv("ENABLE_PRODUCTION_FEEDBACK_EXPORT"),
+        default=False,
+    )
+    allow_raw_production_text_in_evals = _parse_bool(
+        os.getenv("ALLOW_RAW_PRODUCTION_TEXT_IN_EVALS"),
+        default=False,
+    )
 
     return Settings(
         database_url=os.getenv(
@@ -434,4 +444,6 @@ def get_settings() -> Settings:
         langfuse_release=_get_non_empty_env("LANGFUSE_RELEASE"),
         langfuse_sample_rate=langfuse_sample_rate,
         langfuse_export_default_limit=langfuse_export_default_limit,
+        enable_production_feedback_export=enable_production_feedback_export,
+        allow_raw_production_text_in_evals=allow_raw_production_text_in_evals,
     )

@@ -109,6 +109,8 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.langfuse_release is None
     assert settings.langfuse_sample_rate == 1.0
     assert settings.langfuse_export_default_limit == 100
+    assert settings.enable_production_feedback_export is False
+    assert settings.allow_raw_production_text_in_evals is False
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,6 +185,18 @@ def test_get_settings_uses_configured_langfuse_values(
     assert settings.langfuse_release == "modal-v1"
     assert settings.langfuse_sample_rate == 0.25
     assert settings.langfuse_export_default_limit == 25
+
+
+def test_get_settings_uses_configured_feedback_export_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_PRODUCTION_FEEDBACK_EXPORT", "true")
+    monkeypatch.setenv("ALLOW_RAW_PRODUCTION_TEXT_IN_EVALS", "true")
+
+    settings = get_settings()
+
+    assert settings.enable_production_feedback_export is True
+    assert settings.allow_raw_production_text_in_evals is True
 
 
 @pytest.mark.parametrize(
