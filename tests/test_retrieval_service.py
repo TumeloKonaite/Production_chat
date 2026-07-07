@@ -103,6 +103,40 @@ class MetadataAwareVectorStore(FakeVectorStore):
         return int(self._vector_dimension.removeprefix("vector(").removesuffix(")"))
 
 
+class FakeBind:
+    def __init__(self, dialect_name: str = "postgresql") -> None:
+        self.dialect = type("Dialect", (), {"name": dialect_name})()
+
+
+class IndexAwareVectorStore(MetadataAwareVectorStore):
+    def __init__(self) -> None:
+        super().__init__(
+            collection_metadata={
+                "embedding_provider": "hf",
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+                "embedding_dimension": 384,
+            },
+            vector_dimension="vector(384)",
+        )
+        self.executed_sql: list[str] = []
+        self.commits = 0
+
+    def execute(self, statement) -> "IndexAwareVectorStore":
+        sql_text = str(statement)
+        self.executed_sql.append(sql_text)
+        self._last_scalar = "langchain_pg_embedding" if "to_regclass" in sql_text else None
+        return self
+
+    def scalar_one_or_none(self) -> str | None:
+        return getattr(self, "_last_scalar", None)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def get_bind(self) -> FakeBind:
+        return FakeBind()
+
+
 class FakeKnowledgeRepository:
     def __init__(self, chunks: list[KnowledgeChunk]) -> None:
         self._chunks = list(chunks)
@@ -324,6 +358,35 @@ def test_replace_all_chunks_records_embedding_metadata_on_vector_documents() -> 
         "sentence-transformers/all-MiniLM-L6-v2"
     )
     assert vectorstore.added_documents[0].metadata["embedding_dimension"] == 384
+
+
+def test_replace_all_chunks_ensures_pgvector_indexes_for_postgres_vector_store() -> None:
+    vectorstore = IndexAwareVectorStore()
+    retrieval_service = RetrievalService(settings=build_settings(), vectorstore=vectorstore)
+
+    retrieval_service.replace_all_chunks(
+        [
+            KnowledgeChunk(
+                id="chunk-1",
+                source="projects.md",
+                source_type="markdown",
+                section="Projects",
+                content="Tumelo built a FastAPI retrieval chatbot.",
+                chunk_metadata={"chunk_index": 0},
+            )
+        ]
+    )
+
+    assert any("to_regclass('langchain_pg_embedding')" in sql for sql in vectorstore.executed_sql)
+    assert any(
+        "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_collection_id" in sql
+        for sql in vectorstore.executed_sql
+    )
+    assert any(
+        "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_cosine_ivfflat" in sql
+        for sql in vectorstore.executed_sql
+    )
+    assert vectorstore.commits == 1
 
 
 def test_retrieval_service_rejects_collection_metadata_mismatches() -> None:

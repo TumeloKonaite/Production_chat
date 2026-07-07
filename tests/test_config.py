@@ -180,6 +180,17 @@ def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.Monkey
     assert settings.eval_admin_token == "eval-secret"
 
 
+def test_get_settings_prefers_knowledge_embedding_dimension_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KNOWLEDGE_EMBEDDING_DIMENSION", "1536")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "384")
+
+    settings = get_settings()
+
+    assert settings.embedding_dimension == 1536
+
+
 def test_get_settings_uses_configured_query_rewrite_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -357,6 +368,7 @@ def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:secret@db.example.com:5432/app")
     monkeypatch.setenv("LLM_API_KEY", "prod-key")
+    monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
 
     settings = get_settings()
 

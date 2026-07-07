@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+import logging
 import re
 from typing import Any
 
@@ -28,6 +29,19 @@ from app.services.retrieval.strategies import HybridRetriever, KeywordRetriever,
 from app.services.retrieval.types import RetrievalResult, RetrievedChunk, Retriever
 
 VECTOR_TYPE_PATTERN = re.compile(r"vector\((\d+)\)")
+DEFAULT_PGVECTOR_IVFFLAT_LISTS = 100
+PGVECTOR_DISTANCE_OPERATORS = {
+    "cosine": "vector_cosine_ops",
+    "inner": "vector_ip_ops",
+    "l2": "vector_l2_ops",
+}
+PGVECTOR_DISTANCE_SUFFIXES = {
+    "cosine": "cosine",
+    "inner": "ip",
+    "l2": "l2",
+}
+ENSURED_PGVECTOR_INDEXES: set[tuple[str, str, str]] = set()
+logger = logging.getLogger(__name__)
 
 
 class RetrievalService:
@@ -120,6 +134,7 @@ class RetrievalService:
             for chunk in chunks
         ]
         self.vectorstore.add_documents(documents=documents, ids=[chunk.id for chunk in chunks])
+        self._ensure_pgvector_indexes()
 
     def retrieve(
         self,
@@ -484,6 +499,79 @@ class RetrievalService:
         if match is None:
             return None
         return int(match.group(1))
+
+    def _ensure_pgvector_indexes(self) -> None:
+        if not self._supports_collection_metadata():
+            return
+
+        distance_metric = self._resolve_pgvector_distance_metric()
+        operator_class = PGVECTOR_DISTANCE_OPERATORS.get(distance_metric)
+        index_suffix = PGVECTOR_DISTANCE_SUFFIXES.get(distance_metric)
+        if operator_class is None or index_suffix is None:
+            return
+
+        cache_key = (
+            self._settings.database_url,
+            self._settings.knowledge_collection_name,
+            distance_metric,
+        )
+        if cache_key in ENSURED_PGVECTOR_INDEXES:
+            return
+
+        try:
+            with self.vectorstore._make_sync_session() as session:
+                if not callable(getattr(session, "execute", None)):
+                    return
+
+                bind = session.get_bind()
+                if bind.dialect.name != "postgresql":
+                    return
+
+                table_name = session.execute(
+                    text("SELECT to_regclass('langchain_pg_embedding')")
+                ).scalar_one_or_none()
+                if table_name is None:
+                    return
+
+                session.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_collection_id
+                        ON langchain_pg_embedding (collection_id)
+                        """
+                    )
+                )
+                session.execute(
+                    text(
+                        f"""
+                        CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_{index_suffix}_ivfflat
+                        ON langchain_pg_embedding
+                        USING ivfflat (embedding {operator_class})
+                        WITH (lists = {DEFAULT_PGVECTOR_IVFFLAT_LISTS})
+                        """
+                    )
+                )
+                session.execute(text("ANALYZE langchain_pg_embedding"))
+                session.commit()
+        except Exception:
+            logger.warning(
+                "Unable to ensure pgvector indexes for collection %s.",
+                self._settings.knowledge_collection_name,
+                exc_info=True,
+            )
+            return
+
+        ENSURED_PGVECTOR_INDEXES.add(cache_key)
+
+    def _resolve_pgvector_distance_metric(self) -> str | None:
+        strategy = getattr(self.vectorstore, "_distance_strategy", None)
+        if strategy is None:
+            return "cosine"
+
+        value = getattr(strategy, "value", strategy)
+        if not isinstance(value, str):
+            return None
+        return value.casefold()
 
     def _supports_collection_metadata(self) -> bool:
         if not all(

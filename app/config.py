@@ -196,6 +196,20 @@ def _get_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
     return value
 
 
+def _get_int_env_from_names(
+    names: tuple[str, ...],
+    default: int,
+    *,
+    minimum: int | None = None,
+) -> int:
+    for name in names:
+        raw_value = os.getenv(name)
+        if raw_value is None or not raw_value.strip():
+            continue
+        return _get_int_env(name, default, minimum=minimum)
+    return default
+
+
 def _get_float_env(name: str, default: float, *, minimum: float | None = None) -> float:
     raw_value = os.getenv(name)
     if raw_value is None or not raw_value.strip():
@@ -536,7 +550,11 @@ def get_settings() -> Settings:
             _get_non_empty_env("EMBEDDING_PROVIDER", default="hf") or "hf"
         ).strip().casefold(),
         knowledge_embedding_model=os.getenv("KNOWLEDGE_EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
-        embedding_dimension=_get_int_env("EMBEDDING_DIMENSION", 384, minimum=1),
+        embedding_dimension=_get_int_env_from_names(
+            ("KNOWLEDGE_EMBEDDING_DIMENSION", "EMBEDDING_DIMENSION"),
+            384,
+            minimum=1,
+        ),
         knowledge_collection_name=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),
         knowledge_chunk_size=knowledge_chunk_size,
         knowledge_chunk_overlap=knowledge_chunk_overlap,

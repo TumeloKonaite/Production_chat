@@ -65,6 +65,47 @@ If you use `APP_ENV=production` in your deployment shell:
 APP_ENV=production alembic upgrade head
 ```
 
+The migration history already enables `CREATE EXTENSION IF NOT EXISTS vector`, and the latest pgvector migration also backfills the retrieval indexes when the LangChain tables already exist.
+
+## pgvector storage layout
+
+This app keeps the production RAG data split across:
+
+- `knowledge_chunks`: source chunk text plus chunk metadata for the chat and admin flows
+- `langchain_pg_embedding`: pgvector embeddings stored in the `embedding` column
+- `langchain_pg_collection`: collection-level embedding metadata used to detect stale indexes
+
+The retrieval path uses cosine distance. After ingestion, the app ensures:
+
+- `ix_langchain_pg_embedding_collection_id`
+- `ix_langchain_pg_embedding_embedding_cosine_ivfflat`
+
+The IVFFlat index uses `vector_cosine_ops` with `lists = 100`.
+
+## Re-ingestion and rebuilds
+
+Re-ingest the knowledge base after any of these changes:
+
+1. the embedding provider changes
+2. the embedding model changes
+3. `KNOWLEDGE_EMBEDDING_DIMENSION` changes
+4. `CHUNK_SIZE` or `CHUNK_OVERLAP` changes
+5. document parsing, cleaning, or chunking logic changes
+6. vector index settings change enough to require a rebuild
+
+Recommended rebuild flow:
+
+1. Run `alembic upgrade head`.
+2. If the vector dimension changed, update `KNOWLEDGE_EMBEDDING_DIMENSION` before ingestion.
+3. Re-run `uv run python .\scripts\ingest_knowledge.py`.
+4. Validate retrieval with a targeted query or the opt-in integration smoke test.
+
+Opt-in smoke test:
+
+```bash
+RUN_DB_INTEGRATION_TESTS=true TEST_DATABASE_URL="postgresql+psycopg://..." pytest tests/integration/test_supabase_pgvector_smoke.py
+```
+
 ## Verifying connectivity
 
 Run the backend with the pooled runtime URL:
