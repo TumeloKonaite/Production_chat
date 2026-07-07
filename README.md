@@ -131,7 +131,7 @@ LANGFUSE_SAMPLE_RATE=1.0
 LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 EMBEDDING_PROVIDER=hf
 KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIMENSION=384
+KNOWLEDGE_EMBEDDING_DIMENSION=384
 CHUNK_SIZE=1000
 CHUNK_OVERLAP=200
 DEFAULT_PROMPT_VERSION=v1_professional
@@ -389,10 +389,45 @@ Embedding configuration is also explicit:
 ```env
 EMBEDDING_PROVIDER=hf
 KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIMENSION=384
+KNOWLEDGE_EMBEDDING_DIMENSION=384
 ```
 
-If you change the embedding provider, model, or dimension, rebuild the knowledge index before running retrieval again. Retrieval now validates the stored index metadata and fails loudly when the active embedding config does not match the indexed config.
+`KNOWLEDGE_EMBEDDING_DIMENSION` is the preferred setting name. The legacy `EMBEDDING_DIMENSION` alias remains supported for older environments.
+
+If you change the embedding provider, model, or dimension, rebuild the knowledge index before running retrieval again. Retrieval validates both the stored collection metadata and the underlying pgvector column dimension, then fails loudly when the active embedding config does not match the indexed config.
+
+### Supabase pgvector details
+
+Production vector retrieval uses Supabase Postgres with pgvector through LangChain's `PGVector` tables:
+
+- `knowledge_chunks` stores the source chunk text and chunk metadata used by the existing RAG flow.
+- `langchain_pg_embedding.embedding` stores the actual `vector(...)` values used for similarity search.
+- `langchain_pg_collection` stores per-collection embedding metadata so the app can reject stale indexes when the embedding config changes.
+
+The production retrieval path assumes cosine distance and creates:
+
+- a btree index on `langchain_pg_embedding.collection_id`
+- an IVFFlat index on `langchain_pg_embedding.embedding` using `vector_cosine_ops` with `lists = 100`
+
+That keeps the Supabase path simple while staying aligned with the current similarity query behavior.
+
+Re-ingestion is required when any of these change:
+
+- embedding provider
+- embedding model
+- embedding dimension
+- chunking strategy
+- `CHUNK_SIZE`
+- `CHUNK_OVERLAP`
+- document parsing or cleaning logic that changes chunk text
+- vector index settings in a way that materially changes retrieval behavior
+
+For a clean rebuild:
+
+1. Run `alembic upgrade head`.
+2. If the vector dimension changed, update `KNOWLEDGE_EMBEDDING_DIMENSION` and let the migration recreate the pgvector storage shape.
+3. Re-run `uv run python .\scripts\ingest_knowledge.py`.
+4. Validate retrieval with a targeted smoke query or the opt-in Postgres integration test.
 
 ### Run ingestion from the CLI
 
@@ -532,7 +567,7 @@ Retrieval defaults to the local Hugging Face embedding path:
 ```env
 EMBEDDING_PROVIDER=hf
 KNOWLEDGE_EMBEDDING_MODEL=all-MiniLM-L6-v2
-EMBEDDING_DIMENSION=384
+KNOWLEDGE_EMBEDDING_DIMENSION=384
 ```
 
 OpenRouter-compatible embedding experiments can use:
@@ -540,12 +575,12 @@ OpenRouter-compatible embedding experiments can use:
 ```env
 EMBEDDING_PROVIDER=openrouter
 KNOWLEDGE_EMBEDDING_MODEL=openai/text-embedding-3-small
-EMBEDDING_DIMENSION=1536
+KNOWLEDGE_EMBEDDING_DIMENSION=1536
 OPENROUTER_API_KEY=<openrouter-api-key>
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 ```
 
-`EMBEDDING_DIMENSION` must match both the provider output and the pgvector storage dimension. If you change provider, model, or dimension, rebuild the knowledge index. If you change to a new vector dimension, you may also need a database migration before ingestion can succeed.
+`KNOWLEDGE_EMBEDDING_DIMENSION` must match both the provider output and the pgvector storage dimension. If you change provider, model, or dimension, rebuild the knowledge index. If you change to a new vector dimension, run migrations before ingestion so the pgvector column type matches the new embedding size.
 
 ### Adding custom model configs
 
@@ -924,6 +959,14 @@ When `ENABLE_MLFLOW_TRACKING=true`, the runners log one MLflow run per evaluated
 
 ```bash
 pytest
+```
+
+Opt-in Postgres smoke coverage for the Supabase-compatible pgvector path:
+
+```bash
+RUN_DB_INTEGRATION_TESTS=true \
+TEST_DATABASE_URL=postgresql+psycopg://... \
+pytest tests/integration/test_supabase_pgvector_smoke.py
 ```
 
 Targeted eval checks for the retrieval runners:
