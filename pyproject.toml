@@ -20,8 +20,21 @@ dependencies = [
     "sentence-transformers>=5.2.0,<6.0.0",
     "sqlalchemy>=2.0.0,<3.0.0",
     "uvicorn>=0.30.0,<1.0.0",
+    "ruff>=0.15.20",
+]
+
+[project.optional-dependencies]
+response-cache = [
+    "redis>=5.2.0,<6.0.0",
+    "redisvl>=0.8.0,<1.0.0",
 ]
 
 [tool.pytest.ini_options]
 addopts = "--basetemp=.pytest_tmp"
 cache_dir = ".pytest_tmp/.pytest_cache"
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"evals/feedback/*.py" = ["E402"]
+"evals/langfuse/*.py" = ["E402"]
+"evals/runners/*.py" = ["E402"]

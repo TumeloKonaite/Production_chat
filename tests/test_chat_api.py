@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
+import json
 import uuid
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.dependencies.chat_dependencies import (
     get_llm_service,
     get_observability_tracer,
+    get_response_cache,
     get_retrieval_service,
     get_trace_service,
 )
@@ -29,6 +31,15 @@ from app.repositories.models import (
     Message,
     MessageFeedback,
     RetrievalLog,
+)
+from app.services.cache import (
+    CacheScope,
+    CacheLookupResult,
+    CacheStoreEntry,
+    ResponseCacheLookupOutcome,
+    ResponseCacheStoreOutcome,
+    hash_scope,
+    stable_hash,
 )
 from app.services.llm import (
     LLMChatMessage,
@@ -62,6 +73,7 @@ class FakeLLMService:
         self.system_prompts: list[str] = []
         self.prompt_versions: list[str] = []
         self.model_config_ids: list[str] = []
+        self.response_model_name_overrides: dict[str, str] = {}
 
     @property
     def model(self) -> str:
@@ -113,12 +125,16 @@ class FakeLLMService:
         estimated_cost_usd = (
             0.000768 if selected_model.config_id == "openai:gpt-4.1-mini" else 0.00384
         )
+        response_model_name = self.response_model_name_overrides.get(
+            selected_model.config_id,
+            selected_model.model,
+        )
 
         return LLMGeneratedResponse(
             message=self.reply,
-            model=selected_model.model,
+            model=response_model_name,
             model_provider=selected_model.provider,
-            model_name=selected_model.model,
+            model_name=response_model_name,
             model_config_id=selected_model.config_id,
             prompt_version=prompt_version,
             retrieval_config=retrieval_config,
@@ -133,15 +149,83 @@ class FakeLLMService:
 
 
 class FakeRetrievalService:
-    def __init__(self, retrieved_chunks: list[RetrievedChunk] | None = None) -> None:
+    def __init__(
+        self,
+        retrieved_chunks: list[RetrievedChunk] | None = None,
+        *,
+        query_embedding: list[float] | None = None,
+    ) -> None:
         self.retrieved_chunks = (
             [build_retrieved_chunk()] if retrieved_chunks is None else list(retrieved_chunks)
         )
         self.calls: list[tuple[str, int | None]] = []
+        self.query_embeddings_used: list[list[float] | None] = []
+        self.embed_query_calls: list[str] = []
+        self.query_embedding = [0.11, 0.22, 0.33] if query_embedding is None else list(query_embedding)
+        self.reranker_enabled = False
+        self.reranker_type = "none"
+        self.vector_store_name = "pgvector"
 
-    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievedChunk]:
         self.calls.append((query, top_k))
+        self.query_embeddings_used.append(query_embedding)
         return list(self.retrieved_chunks)
+
+    def embed_query(self, query: str) -> list[float]:
+        self.embed_query_calls.append(query)
+        return list(self.query_embedding)
+
+
+class FakeResponseCache:
+    def __init__(
+        self,
+        *,
+        exact_outcome: ResponseCacheLookupOutcome | None = None,
+        semantic_outcome: ResponseCacheLookupOutcome | None = None,
+        store_outcome: ResponseCacheStoreOutcome | None = None,
+    ) -> None:
+        self.exact_outcome = exact_outcome or ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="disabled",
+            latency_ms=0,
+        )
+        self.semantic_outcome = semantic_outcome or ResponseCacheLookupOutcome(
+            cache_type="semantic",
+            hit=False,
+            reason="disabled",
+            latency_ms=0,
+        )
+        self.store_outcome = store_outcome or ResponseCacheStoreOutcome(
+            success=False,
+            reason="write_skipped",
+            latency_ms=0,
+        )
+        self.exact_requests: list[object] = []
+        self.semantic_requests: list[object] = []
+        self.store_entries: list[CacheStoreEntry] = []
+
+    async def get_exact(self, request) -> ResponseCacheLookupOutcome:
+        self.exact_requests.append(request)
+        if callable(self.exact_outcome):
+            return self.exact_outcome(request)
+        return self.exact_outcome
+
+    async def get_semantic(self, request) -> ResponseCacheLookupOutcome:
+        self.semantic_requests.append(request)
+        if callable(self.semantic_outcome):
+            return self.semantic_outcome(request)
+        return self.semantic_outcome
+
+    async def store(self, entry: CacheStoreEntry) -> ResponseCacheStoreOutcome:
+        self.store_entries.append(entry)
+        return self.store_outcome
 
 
 class FailingTraceService:
@@ -200,49 +284,133 @@ def build_retrieved_chunk(
     )
 
 
-def build_test_settings(*, default_prompt_version: str = "v1_professional") -> Settings:
-    return Settings(
-        database_url="sqlite:///unused-for-tests.db",
-        openai_api_key="test-key",
-        openai_base_url="https://api.openai.com/v1",
-        openrouter_api_key="openrouter-test-key",
-        openrouter_base_url="https://openrouter.ai/api/v1",
-        tavus_api_key="tavus-test-key",
-        tavus_base_url="https://tavus.example",
-        tavus_face_id="face_123",
-        tavus_pal_id="pal_123",
-        public_backend_url="https://backend.example",
-        tavus_tool_secret="tool-secret",
-        ingestion_api_secret="ingestion-secret",
-        eval_admin_token="eval-secret",
-        default_model_config_id="openai:gpt-4.1-mini",
-        model_configs_json=None,
-        embedding_provider="hf",
-        knowledge_embedding_model="all-MiniLM-L6-v2",
-        embedding_dimension=384,
-        knowledge_collection_name="personal_knowledge_base",
-        default_prompt_version=default_prompt_version,
-        conversation_history_limit=10,
-        retriever_type="vector",
-        retrieval_top_k=5,
-        retrieval_min_similarity=0.55,
-        default_retrieval_config="default",
-        enable_mlflow_tracking=False,
-        mlflow_tracking_uri=None,
-        mlflow_experiment_name="personal-chatbot-model-comparison",
-        enable_dagshub_tracking=False,
-        dagshub_repo_owner=None,
-        dagshub_repo_name=None,
-        dagshub_token=None,
+def build_cache_lookup_result(
+    *,
+    answer_text: str = "Tumelo builds AI systems.",
+    cache_type: str = "exact",
+    metadata_scope_hash: str | None = None,
+    prompt_version: str = "v1_professional",
+    expires_at: datetime | None = None,
+    total_latency_ms: int = 1000,
+) -> CacheLookupResult:
+    created_at = datetime.now(timezone.utc)
+    retriever_config_hash = stable_hash(
+        json.dumps(
+            {
+                "retriever_type": "vector",
+                "top_k": 5,
+                "retrieval_min_similarity": 0.55,
+                "default_retrieval_config": "default",
+                "query_rewrite_enabled": False,
+                "query_rewrite_model": "openai:gpt-4.1-mini",
+                "query_rewrite_prompt_version": "v1",
+                "query_rewrite_temperature": 0.0,
+                "reranker_enabled": False,
+                "reranker_type": "none",
+                "reranker_model": "openai:gpt-4.1-mini",
+                "reranker_initial_top_k": 20,
+                "reranker_final_top_k": 5,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     )
+    scope = CacheScope(
+        knowledge_base_version="personal_knowledge_base",
+        prompt_version=prompt_version,
+        llm_provider="openai",
+        llm_model="gpt-4.1-mini",
+        embedding_provider="hf",
+        embedding_model="all-MiniLM-L6-v2",
+        retriever_type="vector",
+        top_k=5,
+        query_rewrite_enabled=False,
+        reranker_enabled=False,
+        retriever_config_hash=retriever_config_hash,
+    )
+    return CacheLookupResult(
+        entry_id="entry-1",
+        cache_type="semantic" if cache_type == "semantic" else "exact",
+        normalized_question="tell me about tumelo's work.",
+        question_hash="question-hash",
+        answer_text=answer_text,
+        source_documents=[{"chunk_id": "chunk-1", "source": "projects.md"}],
+        llm_provider="openai",
+        llm_model="gpt-4.1-mini",
+        prompt_version=prompt_version,
+        embedding_provider="hf",
+        embedding_model="all-MiniLM-L6-v2",
+        knowledge_base_version="personal_knowledge_base",
+        retriever_type="vector",
+        top_k=5,
+        query_rewrite_enabled=False,
+        reranker_enabled=False,
+        retriever_config_hash=retriever_config_hash,
+        metadata_scope_hash=metadata_scope_hash or hash_scope(scope),
+        retrieval_config="default",
+        created_at=created_at,
+        expires_at=expires_at or (created_at + timedelta(hours=1)),
+        last_hit_at=None,
+        hit_count=0,
+        total_latency_ms=total_latency_ms,
+        embedding_latency_ms=18,
+        retrieval_latency_ms=120,
+        llm_latency_ms=842,
+    )
+
+
+def build_test_settings(
+    *,
+    default_prompt_version: str = "v1_professional",
+    **overrides: object,
+) -> Settings:
+    values: dict[str, object] = {
+        "database_url": "sqlite:///unused-for-tests.db",
+        "openai_api_key": "test-key",
+        "openai_base_url": "https://api.openai.com/v1",
+        "openrouter_api_key": "openrouter-test-key",
+        "openrouter_base_url": "https://openrouter.ai/api/v1",
+        "tavus_api_key": "tavus-test-key",
+        "tavus_base_url": "https://tavus.example",
+        "tavus_face_id": "face_123",
+        "tavus_pal_id": "pal_123",
+        "public_backend_url": "https://backend.example",
+        "tavus_tool_secret": "tool-secret",
+        "ingestion_api_secret": "ingestion-secret",
+        "eval_admin_token": "eval-secret",
+        "default_model_config_id": "openai:gpt-4.1-mini",
+        "model_configs_json": None,
+        "embedding_provider": "hf",
+        "knowledge_embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dimension": 384,
+        "knowledge_collection_name": "personal_knowledge_base",
+        "default_prompt_version": default_prompt_version,
+        "conversation_history_limit": 10,
+        "retriever_type": "vector",
+        "retrieval_top_k": 5,
+        "retrieval_min_similarity": 0.55,
+        "default_retrieval_config": "default",
+        "enable_mlflow_tracking": False,
+        "mlflow_tracking_uri": None,
+        "mlflow_experiment_name": "personal-chatbot-model-comparison",
+        "enable_dagshub_tracking": False,
+        "dagshub_repo_owner": None,
+        "dagshub_repo_name": None,
+        "dagshub_token": None,
+        "response_cache_knowledge_base_version": "personal_knowledge_base",
+    }
+    values.update(overrides)
+    return Settings(**values)
 
 
 def build_test_client(
     tmp_path,
     fake_llm: FakeLLMService,
     fake_retrieval: FakeRetrievalService | None = None,
+    fake_response_cache: FakeResponseCache | None = None,
     *,
     default_prompt_version: str = "v1_professional",
+    settings_overrides: dict[str, object] | None = None,
 ) -> tuple[TestClient, sessionmaker[Session], FakeRetrievalService]:
     database_path = tmp_path / "test_chatbot.db"
     engine = create_engine(
@@ -267,11 +435,16 @@ def build_test_client(
             session.close()
 
     retrieval_service = fake_retrieval or FakeRetrievalService()
-    settings = build_test_settings(default_prompt_version=default_prompt_version)
+    settings = build_test_settings(
+        default_prompt_version=default_prompt_version,
+        **(settings_overrides or {}),
+    )
+    response_cache = fake_response_cache or FakeResponseCache()
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_llm_service] = lambda: fake_llm
     app.dependency_overrides[get_retrieval_service] = lambda: retrieval_service
+    app.dependency_overrides[get_response_cache] = lambda: response_cache
     return TestClient(app), session_factory, retrieval_service
 
 
@@ -371,6 +544,10 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
             "total_tokens": 1380,
         },
         "estimated_cost_usd": 0.000768,
+        "response_cache_hit": False,
+        "response_cache_type": None,
+        "response_cache_reason": "disabled",
+        "response_cache_distance": None,
     }
 
     with session_factory() as session:
@@ -458,6 +635,356 @@ def test_chat_creates_internal_trace_records(tmp_path) -> None:
             }
         ]
     }
+
+
+def test_chat_exact_cache_hit_skips_embedding_retrieval_and_llm(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="This should not be used.")
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=lambda request: ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=True,
+            reason="exact_hit",
+            latency_ms=4,
+            entry=build_cache_lookup_result(
+                answer_text="Cached exact answer.",
+                metadata_scope_hash=request.metadata_scope_hash,
+                prompt_version=request.metadata_scope.prompt_version,
+            ),
+            entry_id="entry-1",
+        )
+    )
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Cached exact answer."
+    assert response.json()["latency_ms"] == 0
+    assert response.json()["response_cache_hit"] is True
+    assert response.json()["response_cache_type"] == "exact"
+    assert response.json()["response_cache_reason"] == "exact_hit"
+    assert response.json()["response_cache_distance"] is None
+    assert fake_llm.calls == []
+    assert retrieval_service.embed_query_calls == []
+    assert retrieval_service.calls == []
+
+    traces = fetch_chat_traces(session_factory)
+    assert traces[0].trace_metadata["response_cache"]["response_cache_hit"] is True
+    assert traces[0].trace_metadata["response_cache"]["response_cache_type"] == "exact"
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == "exact_hit"
+    assert traces[0].trace_metadata["response_cache"]["response_cache_lookup_latency_ms"] == 4
+
+
+def test_chat_semantic_cache_hit_skips_retrieval_and_llm(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="This should not be used.")
+    fake_retrieval = FakeRetrievalService(query_embedding=[0.7, 0.8, 0.9])
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="miss_no_exact_entry",
+            latency_ms=3,
+        ),
+        semantic_outcome=lambda request: ResponseCacheLookupOutcome(
+            cache_type="semantic",
+            hit=True,
+            reason="semantic_hit",
+            latency_ms=5,
+            entry=build_cache_lookup_result(
+                answer_text="Cached semantic answer.",
+                cache_type="semantic",
+                metadata_scope_hash=request.metadata_scope_hash,
+                prompt_version=request.metadata_scope.prompt_version,
+            ),
+            distance=0.04,
+            entry_id="entry-1",
+        ),
+    )
+    client, _, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={
+            "enable_response_cache": True,
+            "enable_semantic_response_cache": True,
+        },
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Cached semantic answer."
+    assert response.json()["response_cache_hit"] is True
+    assert response.json()["response_cache_type"] == "semantic"
+    assert response.json()["response_cache_reason"] == "semantic_hit"
+    assert response.json()["response_cache_distance"] == pytest.approx(0.04)
+    assert fake_llm.calls == []
+    assert retrieval_service.embed_query_calls == ["Tell me about Tumelo's work."]
+    assert retrieval_service.calls == []
+    assert fake_cache.semantic_requests[0].question_embedding == [0.7, 0.8, 0.9]
+
+
+def test_chat_cache_miss_reuses_embedding_and_writes_cache_entry(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Freshly generated answer.")
+    fake_retrieval = FakeRetrievalService(query_embedding=[0.4, 0.5, 0.6])
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="miss_no_exact_entry",
+            latency_ms=2,
+        ),
+        semantic_outcome=ResponseCacheLookupOutcome(
+            cache_type="semantic",
+            hit=False,
+            reason="miss_no_semantic_candidates",
+            latency_ms=6,
+        ),
+        store_outcome=ResponseCacheStoreOutcome(
+            success=True,
+            reason="write_success",
+            latency_ms=7,
+            entry_id="entry-1",
+        ),
+    )
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={
+            "enable_response_cache": True,
+            "enable_semantic_response_cache": True,
+        },
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["response_cache_hit"] is False
+    assert response.json()["response_cache_type"] is None
+    assert response.json()["response_cache_reason"] == "miss_no_semantic_candidates"
+    assert response.json()["response_cache_distance"] is None
+    assert fake_llm.calls != []
+    assert retrieval_service.embed_query_calls == ["Tell me about Tumelo's work."]
+    assert retrieval_service.query_embeddings_used == [[0.4, 0.5, 0.6]]
+    assert fake_cache.store_entries[0].question_embedding == [0.4, 0.5, 0.6]
+
+    traces = fetch_chat_traces(session_factory)
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == (
+        "miss_no_semantic_candidates"
+    )
+    assert traces[0].trace_metadata["response_cache"]["response_cache_write_reason"] == (
+        "write_success"
+    )
+
+
+def test_chat_exact_cache_hit_works_with_versioned_runtime_model_name(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Versioned-model cached answer.")
+    fake_llm.response_model_name_overrides["openai:gpt-4.1-mini"] = "gpt-4.1-mini-2025-04-14"
+    fake_retrieval = FakeRetrievalService(query_embedding=[0.4, 0.5, 0.6])
+    fake_cache = FakeResponseCache(
+        exact_outcome=lambda request: ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=True,
+            reason="exact_hit",
+            latency_ms=4,
+            entry=build_cache_lookup_result(
+                answer_text="Versioned-model cached answer.",
+                metadata_scope_hash=request.metadata_scope_hash,
+                prompt_version=request.metadata_scope.prompt_version,
+            ),
+            entry_id="entry-1",
+        )
+        if fake_cache.store_entries
+        else ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="miss_no_exact_entry",
+            latency_ms=2,
+        ),
+        store_outcome=ResponseCacheStoreOutcome(
+            success=True,
+            reason="write_success",
+            latency_ms=7,
+            entry_id="entry-1",
+        ),
+    )
+    client, _, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    first_response = client.post("/chat", json={"message": "What does Tumelo do?"})
+    second_response = client.post("/chat", json={"message": "What does Tumelo do?"})
+
+    app.dependency_overrides.clear()
+
+    assert first_response.status_code == 200
+    assert first_response.json()["response_cache_hit"] is False
+    assert first_response.json()["response_cache_reason"] == "miss_no_exact_entry"
+    assert first_response.json()["response_cache_distance"] is None
+    assert first_response.json()["model_name"] == "gpt-4.1-mini-2025-04-14"
+    assert second_response.status_code == 200
+    assert second_response.json()["response_cache_hit"] is True
+    assert second_response.json()["response_cache_type"] == "exact"
+    assert second_response.json()["response_cache_reason"] == "exact_hit"
+    assert second_response.json()["response_cache_distance"] is None
+    assert second_response.json()["message"] == "Versioned-model cached answer."
+    assert fake_llm.calls != []
+    assert retrieval_service.calls == [("What does Tumelo do?", 5)]
+    assert fake_cache.store_entries[0].llm_model == "gpt-4.1-mini"
+
+
+def test_chat_metadata_mismatch_cache_entry_is_treated_as_miss(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Fresh answer after mismatch.")
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=True,
+            reason="exact_hit",
+            latency_ms=4,
+            entry=build_cache_lookup_result(metadata_scope_hash="wrong-scope"),
+            entry_id="entry-1",
+        )
+    )
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Fresh answer after mismatch."
+    assert fake_llm.calls != []
+    assert retrieval_service.calls == [("Tell me about Tumelo's work.", 5)]
+    traces = fetch_chat_traces(session_factory)
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == (
+        "miss_metadata_mismatch"
+    )
+
+
+def test_chat_expired_cache_entry_is_treated_as_miss(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Fresh answer after expiry.")
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=lambda request: ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=True,
+            reason="exact_hit",
+            latency_ms=4,
+            entry=build_cache_lookup_result(
+                metadata_scope_hash=request.metadata_scope_hash,
+                prompt_version=request.metadata_scope.prompt_version,
+                expires_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            ),
+            entry_id="entry-1",
+        )
+    )
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Fresh answer after expiry."
+    assert fake_llm.calls != []
+    assert retrieval_service.calls == [("Tell me about Tumelo's work.", 5)]
+    traces = fetch_chat_traces(session_factory)
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == (
+        "miss_expired"
+    )
+
+
+def test_chat_redis_unavailable_does_not_break_normal_path(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Fallback to normal path.")
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="redis_unavailable",
+            latency_ms=9,
+        )
+    )
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Fallback to normal path."
+    assert fake_llm.calls != []
+    assert retrieval_service.calls == [("Tell me about Tumelo's work.", 5)]
+    traces = fetch_chat_traces(session_factory)
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == (
+        "redis_unavailable"
+    )
+
+
+def test_failed_llm_response_does_not_write_cache_entry(tmp_path) -> None:
+    fake_llm = FakeLLMService(fail=True)
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="miss_no_exact_entry",
+            latency_ms=1,
+        )
+    )
+    client, _, _ = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={"enable_response_cache": True},
+    )
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    assert fake_cache.store_entries == []
 
 
 def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:

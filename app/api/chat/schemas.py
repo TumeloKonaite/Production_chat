@@ -44,6 +44,10 @@ class ChatResponse(BaseModel):
     latency_ms: int | None = None
     token_usage: TokenUsageResponse
     estimated_cost_usd: float | None = None
+    response_cache_hit: bool
+    response_cache_type: Literal["exact", "semantic"] | None = None
+    response_cache_reason: str
+    response_cache_distance: float | None = None
 
 
 class FeedbackCreate(BaseModel):

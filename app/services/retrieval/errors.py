@@ -1,5 +1,4 @@
-class EmbeddingConfigurationError(Exception):
-    """Raised when the configured embedding provider cannot be used safely."""
+from app.infrastructure.embeddings.errors import EmbeddingConfigurationError
 
 
 class VectorIndexConfigurationError(Exception):

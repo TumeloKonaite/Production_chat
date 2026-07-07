@@ -254,7 +254,10 @@ def test_tavus_tool_endpoint_accepts_valid_secret_and_calls_chat_service(tmp_pat
         "source": "tavus_tool_call",
         "tavus_conversation_id": "tavus-external-conv-1",
     }
-    assert messages[1].message_metadata == messages[0].message_metadata
+    assert messages[1].message_metadata["visitor_name"] == "Amina"
+    assert messages[1].message_metadata["source"] == "tavus_tool_call"
+    assert messages[1].message_metadata["tavus_conversation_id"] == "tavus-external-conv-1"
+    assert isinstance(messages[1].message_metadata["trace_id"], str)
 
 
 def test_end_tavus_conversation_calls_service() -> None:

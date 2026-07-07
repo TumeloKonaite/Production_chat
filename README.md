@@ -143,6 +143,18 @@ RERANKER_TYPE=none
 RERANKER_MODEL=openai:gpt-4.1-mini
 RERANKER_INITIAL_TOP_K=20
 RERANKER_FINAL_TOP_K=5
+ENABLE_RESPONSE_CACHE=false
+RESPONSE_CACHE_PROVIDER=redis
+REDIS_URL=redis://localhost:6379/0
+ENABLE_EXACT_RESPONSE_CACHE=true
+ENABLE_SEMANTIC_RESPONSE_CACHE=false
+RESPONSE_CACHE_TTL_SECONDS=604800
+RESPONSE_CACHE_EXACT_PREFIX=chat:exact
+RESPONSE_CACHE_SEMANTIC_INDEX=chat_semantic_cache
+RESPONSE_CACHE_DISTANCE_THRESHOLD=0.10
+RESPONSE_CACHE_MAX_RESULTS=3
+RESPONSE_CACHE_STORE_PRIVATE_SESSIONS=false
+RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION=personal_knowledge_base
 ENABLE_MLFLOW_TRACKING=false
 MLFLOW_TRACKING_URI=
 MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
@@ -162,22 +174,28 @@ Install dependencies:
 uv sync
 ```
 
+Install the optional Redis response-cache dependencies only when you want to enable response caching locally:
+
+```bash
+uv sync --extra response-cache
+```
+
 Run the database migration:
 
 ```bash
 alembic upgrade head
 ```
 
-If you want the local Postgres instance from `docker-compose.yml`, start it first so the database is listening on `127.0.0.1:5434`:
+If you want the local Postgres and Redis instances from `docker-compose.yml`, start them first so the database is listening on `127.0.0.1:5434` and Redis is listening on `127.0.0.1:6379`:
 
 ```bash
-docker compose up -d db
+docker compose up -d db redis
 ```
 
 If you also want pgAdmin for local database inspection, start both services:
 
 ```bash
-docker compose up -d db pgadmin
+docker compose up -d db redis pgadmin
 ```
 
 pgAdmin is then available at `http://127.0.0.1:5051` with:
@@ -217,13 +235,38 @@ Run the API:
 uvicorn main:app --reload
 ```
 
+### Response cache
+
+Response caching is disabled by default. When enabled, the chat service checks a Redis exact-match cache before retrieval, then optionally checks a RedisVL semantic cache before running the normal RAG and LLM path.
+
+Set:
+
+```env
+ENABLE_RESPONSE_CACHE=true
+RESPONSE_CACHE_PROVIDER=redis
+REDIS_URL=redis://localhost:6379/0
+ENABLE_EXACT_RESPONSE_CACHE=true
+ENABLE_SEMANTIC_RESPONSE_CACHE=false
+RESPONSE_CACHE_TTL_SECONDS=604800
+RESPONSE_CACHE_DISTANCE_THRESHOLD=0.10
+RESPONSE_CACHE_MAX_RESULTS=3
+RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION=personal_knowledge_base
+```
+
+- Exact caching works with plain Redis.
+- Semantic caching requires the optional `response-cache` dependencies and a Redis server with RediSearch support, such as `redis/redis-stack-server`.
+- If you run the API on your host and Redis in Docker on Windows, prefer `REDIS_URL=redis://127.0.0.1:6379/0` to avoid IPv6 `localhost` resolution issues.
+- Cache hits skip retrieval and LLM generation; semantic hits reuse the retrieval embedding and skip the LLM path.
+- The cache is scoped by knowledge-base version, prompt version, model, embedding model, and retrieval configuration to avoid stale reuse.
+- Redis failures degrade gracefully to the normal chat path.
+
 ## Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-`docker compose up -d` starts the full local stack, including `db` and `pgadmin`. If you only want the database and admin UI, use `docker compose up -d db pgadmin`. The pgAdmin data directory is persisted in the `pgadmin_data` volume so saved server registrations survive container restarts.
+`docker compose up -d` starts the full local stack, including `db`, `redis`, and `pgadmin`. If you only want the local infrastructure services, use `docker compose up -d db redis pgadmin`. The bundled Redis service uses Redis Stack so semantic response caching can use RediSearch. The pgAdmin data directory is persisted in the `pgadmin_data` volume so saved server registrations survive container restarts. Redis persistence is stored in the `redis_data` volume.
 
 ## Example request
 

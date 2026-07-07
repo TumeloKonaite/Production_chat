@@ -42,6 +42,10 @@ async def chat(
             total_tokens=response.token_usage.total_tokens,
         ),
         estimated_cost_usd=response.estimated_cost_usd,
+        response_cache_hit=response.response_cache_hit,
+        response_cache_type=response.response_cache_type,
+        response_cache_reason=response.response_cache_reason,
+        response_cache_distance=response.response_cache_distance,
     )
 
 

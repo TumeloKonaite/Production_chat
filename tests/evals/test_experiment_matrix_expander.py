@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from evals.matrix.expander import expand_suite_plan, format_suite_plan
 from evals.matrix.models import ExperimentSuiteConfig
-from evals.matrix.runner import run_experiment_matrix
 
 
 def test_expand_suite_plan_builds_cartesian_product_for_rag() -> None:

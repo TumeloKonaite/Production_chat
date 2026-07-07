@@ -16,7 +16,7 @@ from app.services.chat.prompting import (
     should_use_direct_fallback,
 )
 from app.services.evals.eval_service import score_groundedness, score_quality
-from app.services.llm import LLMChatMessage, LLMService, TokenUsage
+from app.services.llm import LLMChatMessage, LLMService
 from app.services.retrieval import RetrievedChunk
 from evals.feedback.feedback_dataset import FEEDBACK_DATASET_SOURCE
 

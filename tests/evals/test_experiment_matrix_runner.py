@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,10 +12,6 @@ from app.services.evals.generation_eval_service import (
 from evals.matrix.config_loader import load_experiment_matrix_config
 from evals.matrix.models import ExperimentMatrixConfig, ExperimentSuiteConfig
 from evals.matrix.runner import run_experiment_matrix
-from evals.runners.retrieval_eval_runner import (
-    RetrievalDatasetValidationSummary,
-    RetrievalEvalRunResult,
-)
 from evals.runners.run_generation_eval import GenerationEvalRunResult
 import evals.runners.run_experiment_matrix as experiment_matrix_cli
 

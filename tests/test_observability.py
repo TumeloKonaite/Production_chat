@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
-import pytest
 
 from app.config import Settings
 from app.infrastructure.observability import NoOpTracer, get_tracer
