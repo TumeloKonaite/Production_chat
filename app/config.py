@@ -15,6 +15,7 @@ DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
+SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +81,18 @@ class Settings:
     langfuse_export_default_limit: int = 100
     enable_production_feedback_export: bool = False
     allow_raw_production_text_in_evals: bool = False
+    enable_response_cache: bool = False
+    response_cache_provider: str = "redis"
+    redis_url: str = "redis://localhost:6379/0"
+    enable_exact_response_cache: bool = True
+    enable_semantic_response_cache: bool = False
+    response_cache_ttl_seconds: int = 604800
+    response_cache_exact_prefix: str = "chat:exact"
+    response_cache_semantic_index: str = "chat_semantic_cache"
+    response_cache_distance_threshold: float = 0.10
+    response_cache_max_results: int = 3
+    response_cache_store_private_sessions: bool = False
+    response_cache_knowledge_base_version: str = "default"
 
 
 def _parse_bool(value: str | None, *, default: bool) -> bool:
@@ -168,6 +181,19 @@ def _get_reranker_type_env(name: str, default: str) -> str:
     value = raw_value.strip().casefold()
     if value not in SUPPORTED_RERANKER_TYPES:
         supported_values = ", ".join(sorted(SUPPORTED_RERANKER_TYPES))
+        raise ValueError(f"{name} must be one of: {supported_values}.")
+
+    return value
+
+
+def _get_response_cache_provider_env(name: str, default: str) -> str:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    value = raw_value.strip().casefold()
+    if value not in SUPPORTED_RESPONSE_CACHE_PROVIDERS:
+        supported_values = ", ".join(sorted(SUPPORTED_RESPONSE_CACHE_PROVIDERS))
         raise ValueError(f"{name} must be one of: {supported_values}.")
 
     return value
@@ -317,6 +343,35 @@ def get_settings() -> Settings:
         os.getenv("ALLOW_RAW_PRODUCTION_TEXT_IN_EVALS"),
         default=False,
     )
+    enable_response_cache = _parse_bool(
+        os.getenv("ENABLE_RESPONSE_CACHE"),
+        default=False,
+    )
+    response_cache_provider = _get_response_cache_provider_env(
+        "RESPONSE_CACHE_PROVIDER",
+        "redis",
+    )
+    response_cache_ttl_seconds = _get_int_env(
+        "RESPONSE_CACHE_TTL_SECONDS",
+        604800,
+        minimum=1,
+    )
+    response_cache_distance_threshold = _get_float_env(
+        "RESPONSE_CACHE_DISTANCE_THRESHOLD",
+        0.10,
+        minimum=0.0,
+    )
+    if response_cache_distance_threshold > 2.0:
+        raise ValueError("RESPONSE_CACHE_DISTANCE_THRESHOLD must be less than or equal to 2.0.")
+    response_cache_max_results = _get_int_env(
+        "RESPONSE_CACHE_MAX_RESULTS",
+        3,
+        minimum=1,
+    )
+    response_cache_store_private_sessions = _parse_bool(
+        os.getenv("RESPONSE_CACHE_STORE_PRIVATE_SESSIONS"),
+        default=False,
+    )
 
     return Settings(
         database_url=os.getenv(
@@ -446,4 +501,40 @@ def get_settings() -> Settings:
         langfuse_export_default_limit=langfuse_export_default_limit,
         enable_production_feedback_export=enable_production_feedback_export,
         allow_raw_production_text_in_evals=allow_raw_production_text_in_evals,
+        enable_response_cache=enable_response_cache,
+        response_cache_provider=response_cache_provider,
+        redis_url=(
+            _get_non_empty_env("REDIS_URL", default="redis://localhost:6379/0")
+            or "redis://localhost:6379/0"
+        ),
+        enable_exact_response_cache=_parse_bool(
+            os.getenv("ENABLE_EXACT_RESPONSE_CACHE"),
+            default=True,
+        ),
+        enable_semantic_response_cache=_parse_bool(
+            os.getenv("ENABLE_SEMANTIC_RESPONSE_CACHE"),
+            default=False,
+        ),
+        response_cache_ttl_seconds=response_cache_ttl_seconds,
+        response_cache_exact_prefix=(
+            _get_non_empty_env("RESPONSE_CACHE_EXACT_PREFIX", default="chat:exact")
+            or "chat:exact"
+        ),
+        response_cache_semantic_index=(
+            _get_non_empty_env(
+                "RESPONSE_CACHE_SEMANTIC_INDEX",
+                default="chat_semantic_cache",
+            )
+            or "chat_semantic_cache"
+        ),
+        response_cache_distance_threshold=response_cache_distance_threshold,
+        response_cache_max_results=response_cache_max_results,
+        response_cache_store_private_sessions=response_cache_store_private_sessions,
+        response_cache_knowledge_base_version=(
+            _get_non_empty_env(
+                "RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION",
+                default=os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base"),
+            )
+            or os.getenv("KNOWLEDGE_COLLECTION_NAME", "personal_knowledge_base")
+        ),
     )

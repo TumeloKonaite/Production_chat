@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from langchain_core.embeddings import Embeddings
 
-from app.services.retrieval.errors import EmbeddingConfigurationError
+from app.infrastructure.embeddings.errors import EmbeddingConfigurationError
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from app.infrastructure.embeddings.base import EmbeddingProvider
-from app.services.retrieval.errors import EmbeddingConfigurationError
+from app.infrastructure.embeddings.errors import EmbeddingConfigurationError
 
 OPENAI_EMBEDDING_TIMEOUT_SECONDS = 60.0
 

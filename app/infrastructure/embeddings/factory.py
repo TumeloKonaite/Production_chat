@@ -5,7 +5,7 @@ from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.embeddings.hf_provider import HuggingFaceEmbeddingProvider
 from app.infrastructure.embeddings.openai_provider import OpenAIEmbeddingProvider
 from app.infrastructure.embeddings.openrouter_provider import OpenRouterEmbeddingProvider
-from app.services.retrieval.errors import EmbeddingConfigurationError
+from app.infrastructure.embeddings.errors import EmbeddingConfigurationError
 
 
 def create_embedding_provider(settings: Settings) -> EmbeddingProvider:

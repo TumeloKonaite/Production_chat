@@ -13,11 +13,14 @@ from app.services.retrieval import (
 class FakeVectorStore:
     def __init__(self) -> None:
         self.results: list[tuple[Document, float]] = []
+        self.vector_results: list[tuple[Document, float]] = []
         self.deleted_filters: list[dict[str, object]] = []
         self.added_documents: list[Document] = []
         self.added_ids: list[str] = []
         self.collection_deleted = False
         self.collection_created = False
+        self.relevance_search_calls = 0
+        self.vector_search_calls: list[list[float]] = []
 
     def as_retriever(self, **_: object) -> "FakeVectorStore":
         return self
@@ -41,7 +44,20 @@ class FakeVectorStore:
         *,
         k: int,
     ) -> list[tuple[Document, float]]:
+        self.relevance_search_calls += 1
         return self.results[:k]
+
+    def similarity_search_with_score_by_vector(
+        self,
+        embedding: list[float],
+        *,
+        k: int,
+    ) -> list[tuple[Document, float]]:
+        self.vector_search_calls.append(list(embedding))
+        return self.vector_results[:k]
+
+    def _select_relevance_score_fn(self):
+        return lambda distance: 1.0 - distance
 
 
 class FakeCollection:
@@ -411,3 +427,34 @@ def test_retrieval_service_reranks_retrieved_candidates_before_returning_final_t
     assert [chunk.id for chunk in results] == ["chunk-3"]
     assert results[0].metadata["retrieval_rank"] == 3
     assert results[0].metadata["final_rank"] == 1
+
+
+def test_retrieval_service_uses_precomputed_query_embedding_for_vector_search() -> None:
+    vectorstore = FakeVectorStore()
+    vectorstore.vector_results = [
+        (
+            Document(
+                page_content="Tumelo built a retrieval-grounded chatbot.",
+                metadata={
+                    "chunk_id": "chunk-1",
+                    "source": "projects.md",
+                    "section": "Portfolio Chatbot",
+                },
+            ),
+            0.09,
+        )
+    ]
+    retrieval_service = RetrievalService(
+        settings=build_settings(),
+        vectorstore=vectorstore,
+    )
+
+    results = retrieval_service.retrieve(
+        "Tell me about the chatbot",
+        query_embedding=[0.1, 0.2, 0.3],
+    )
+
+    assert vectorstore.relevance_search_calls == 0
+    assert vectorstore.vector_search_calls == [[0.1, 0.2, 0.3]]
+    assert [chunk.id for chunk in results] == ["chunk-1"]
+    assert results[0].similarity == 0.91

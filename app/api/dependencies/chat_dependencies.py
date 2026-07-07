@@ -1,3 +1,5 @@
+from functools import lru_cache
+import logging
 from pathlib import Path
 
 from fastapi import Depends
@@ -5,14 +7,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.config import Settings
+from app.infrastructure.embeddings import create_embedding_provider
 from app.infrastructure.observability import ObservabilityTracer, get_tracer
 from app.infrastructure.prompts import PromptLoader
 from app.repositories import ConversationRepository, KnowledgeRepository, MessageFeedbackRepository
+from app.services.cache import NoOpResponseCache, RedisResponseCache, ResponseCache
 from app.services.chat import ChatService
 from app.services.feedback import MessageFeedbackService
 from app.services.llm import LLMService
 from app.services.retrieval import RetrievalService
 from app.services.tracing import TraceService
+
+logger = logging.getLogger(__name__)
 
 
 def get_llm_service(settings: Settings = Depends(get_app_settings)) -> LLMService:
@@ -76,6 +82,42 @@ def get_retrieval_service(
     )
 
 
+@lru_cache
+def _build_response_cache(settings: Settings) -> ResponseCache:
+    if not settings.enable_response_cache:
+        return NoOpResponseCache()
+
+    if settings.response_cache_provider != "redis":
+        logger.warning(
+            "Unsupported response cache provider %s. Continuing with disabled cache.",
+            settings.response_cache_provider,
+        )
+        return NoOpResponseCache()
+
+    try:
+        embedding_provider = (
+            create_embedding_provider(settings)
+            if settings.enable_semantic_response_cache
+            else None
+        )
+        return RedisResponseCache(
+            settings=settings,
+            embedding_provider=embedding_provider,
+        )
+    except Exception:
+        logger.warning(
+            "Response cache initialization failed. Continuing with disabled cache.",
+            exc_info=True,
+        )
+        return NoOpResponseCache()
+
+
+def get_response_cache(
+    settings: Settings = Depends(get_app_settings),
+) -> ResponseCache:
+    return _build_response_cache(settings)
+
+
 def get_chat_service(
     settings: Settings = Depends(get_app_settings),
     llm_service: LLMService = Depends(get_llm_service),
@@ -83,6 +125,7 @@ def get_chat_service(
     repository: ConversationRepository = Depends(get_chat_repository),
     knowledge_repository: KnowledgeRepository = Depends(get_knowledge_repository),
     retrieval_service: RetrievalService = Depends(get_retrieval_service),
+    response_cache: ResponseCache = Depends(get_response_cache),
     trace_service: TraceService = Depends(get_trace_service),
     observability_tracer: ObservabilityTracer = Depends(get_observability_tracer),
 ) -> ChatService:
@@ -92,6 +135,7 @@ def get_chat_service(
         repository=repository,
         knowledge_repository=knowledge_repository,
         retrieval_service=retrieval_service,
+        response_cache=response_cache,
         trace_service=trace_service,
         observability_tracer=observability_tracer,
         history_limit=settings.conversation_history_limit,

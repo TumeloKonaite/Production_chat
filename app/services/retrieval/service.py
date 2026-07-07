@@ -9,6 +9,7 @@ from sqlalchemy import func, select, text
 
 from app.config import Settings
 from app.infrastructure.embeddings import EmbeddingDescriptor, create_embedding_provider
+from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.repositories import KnowledgeRepository
 from app.repositories.db.session import get_session_factory
 from app.repositories.models import KnowledgeChunk
@@ -57,6 +58,7 @@ class RetrievalService:
             model=settings.knowledge_embedding_model,
             dimension=settings.embedding_dimension,
         )
+        self._embedding_provider_instance = None
         self._vectorstore = vectorstore
         self._chunk_loader = self._build_chunk_loader(knowledge_repository)
         self._retriever = self._build_retriever()
@@ -85,7 +87,7 @@ class RetrievalService:
         if self._vectorstore is None:
             from langchain_postgres import PGVector
 
-            embedding_provider = create_embedding_provider(self._settings)
+            embedding_provider = self._get_embedding_provider()
             self._vectorstore = PGVector(
                 embeddings=embedding_provider,
                 collection_name=self._settings.knowledge_collection_name,
@@ -95,6 +97,10 @@ class RetrievalService:
                 use_jsonb=True,
             )
         return self._vectorstore
+
+    def embed_query(self, query: str) -> list[float]:
+        embedding = self._get_embedding_provider().embed_query(query)
+        return self._get_embedding_provider().validate_query_dimension(embedding)
 
     def get_vector_store_dimension(self) -> int | None:
         return self._get_vector_column_dimension()
@@ -122,14 +128,34 @@ class RetrievalService:
         ]
         self.vectorstore.add_documents(documents=documents, ids=[chunk.id for chunk in chunks])
 
-    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        return self.retrieve_with_diagnostics(query, top_k=top_k).final_chunks
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        query_embedding: list[float] | None = None,
+    ) -> list[RetrievedChunk]:
+        return self.retrieve_with_diagnostics(
+            query,
+            top_k=top_k,
+            query_embedding=query_embedding,
+        ).final_chunks
 
-    def retrieve_with_diagnostics(self, query: str, top_k: int | None = None) -> RetrievalResult:
+    def retrieve_with_diagnostics(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        query_embedding: list[float] | None = None,
+    ) -> RetrievalResult:
         final_top_k = top_k if top_k is not None else self._default_final_top_k
         initial_top_k = self._resolve_initial_top_k(final_top_k)
         initial_chunks = self._with_retrieval_ranks(
-            self._retriever.retrieve(query, top_k=initial_top_k)
+            self._retrieve_initial_chunks(
+                query,
+                top_k=initial_top_k,
+                query_embedding=query_embedding,
+            )
         )
         final_chunks = self._with_final_ranks(
             self._reranker.rerank(
@@ -211,11 +237,31 @@ class RetrievalService:
         return load_chunks
 
     def _run_vector_search(self, query: str, top_k: int) -> list[RetrievedChunk]:
+        return self._run_vector_search_with_embedding(query, top_k=top_k, query_embedding=None)
+
+    def _run_vector_search_with_embedding(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        query_embedding: list[float] | None,
+    ) -> list[RetrievedChunk]:
         self._ensure_index_compatible()
-        results = self.vectorstore.similarity_search_with_relevance_scores(
-            query,
-            k=top_k,
-        )
+        if query_embedding is None:
+            results = self.vectorstore.similarity_search_with_relevance_scores(
+                query,
+                k=top_k,
+            )
+        else:
+            relevance_fn = getattr(self.vectorstore, "_select_relevance_score_fn")()
+            raw_results = self.vectorstore.similarity_search_with_score_by_vector(
+                query_embedding,
+                k=top_k,
+            )
+            results = [
+                (document, float(relevance_fn(distance)))
+                for document, distance in raw_results
+            ]
 
         retrieved_chunks: list[RetrievedChunk] = []
         for document, similarity in results:
@@ -235,6 +281,87 @@ class RetrievalService:
             )
 
         return retrieved_chunks
+
+    def _retrieve_initial_chunks(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        query_embedding: list[float] | None,
+    ) -> list[RetrievedChunk]:
+        if query_embedding is None:
+            return self._retriever.retrieve(query, top_k=top_k)
+
+        if self._retriever_type == "vector":
+            return self._run_vector_search_with_embedding(
+                query,
+                top_k=top_k,
+                query_embedding=query_embedding,
+            )
+
+        if self._retriever_type == "hybrid":
+            keyword_retriever = KeywordRetriever(
+                default_top_k=self._default_top_k,
+                chunk_loader=self._chunk_loader,
+            )
+            vector_results = self._run_vector_search_with_embedding(
+                query,
+                top_k=top_k,
+                query_embedding=query_embedding,
+            )
+            keyword_results = keyword_retriever.retrieve(query, top_k=top_k)
+            return self._merge_hybrid_results(
+                vector_results=vector_results,
+                keyword_results=keyword_results,
+                top_k=top_k,
+            )
+
+        return self._retriever.retrieve(query, top_k=top_k)
+
+    def _merge_hybrid_results(
+        self,
+        *,
+        vector_results: list[RetrievedChunk],
+        keyword_results: list[RetrievedChunk],
+        top_k: int,
+    ) -> list[RetrievedChunk]:
+        combined_scores: dict[str, float] = {}
+        combined_chunks: dict[str, RetrievedChunk] = {}
+
+        for rank, chunk in enumerate(vector_results, start=1):
+            combined_scores[chunk.id] = combined_scores.get(chunk.id, 0.0) + (1.0 / rank)
+            combined_chunks.setdefault(chunk.id, chunk)
+
+        for rank, chunk in enumerate(keyword_results, start=1):
+            combined_scores[chunk.id] = combined_scores.get(chunk.id, 0.0) + (1.0 / rank)
+            combined_chunks.setdefault(chunk.id, chunk)
+
+        ranked_ids = sorted(
+            combined_scores,
+            key=lambda chunk_id: (
+                combined_scores[chunk_id],
+                combined_chunks[chunk_id].similarity,
+                combined_chunks[chunk_id].source,
+                combined_chunks[chunk_id].id,
+            ),
+            reverse=True,
+        )
+
+        merged_results: list[RetrievedChunk] = []
+        for chunk_id in ranked_ids[:top_k]:
+            chunk = combined_chunks[chunk_id]
+            merged_results.append(
+                RetrievedChunk(
+                    id=chunk.id,
+                    source=chunk.source,
+                    section=chunk.section,
+                    content=chunk.content,
+                    similarity=min(combined_scores[chunk_id] / 2.0, 0.99),
+                    metadata=dict(chunk.metadata),
+                )
+            )
+
+        return merged_results
 
     def _resolve_initial_top_k(self, final_top_k: int) -> int:
         if not self.reranker_enabled:
@@ -375,6 +502,11 @@ class RetrievalService:
         return hasattr(self.vectorstore, "EmbeddingStore") or callable(
             getattr(self.vectorstore, "get_indexed_document_count", None)
         )
+
+    def _get_embedding_provider(self) -> EmbeddingProvider:
+        if self._embedding_provider_instance is None:
+            self._embedding_provider_instance = create_embedding_provider(self._settings)
+        return self._embedding_provider_instance
 
     def _get_indexed_document_count(self, *, session: Any, collection_uuid: object) -> int:
         custom_counter = getattr(self.vectorstore, "get_indexed_document_count", None)

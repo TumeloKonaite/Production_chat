@@ -11,6 +11,7 @@ from app.config import (
     DEFAULT_OPENROUTER_BASE_URL,
     SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_RERANKER_TYPES,
+    SUPPORTED_RESPONSE_CACHE_PROVIDERS,
     SUPPORTED_RETRIEVER_TYPES,
     get_settings,
 )
@@ -111,6 +112,18 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.langfuse_export_default_limit == 100
     assert settings.enable_production_feedback_export is False
     assert settings.allow_raw_production_text_in_evals is False
+    assert settings.enable_response_cache is False
+    assert settings.response_cache_provider == "redis"
+    assert settings.redis_url == "redis://localhost:6379/0"
+    assert settings.enable_exact_response_cache is True
+    assert settings.enable_semantic_response_cache is False
+    assert settings.response_cache_ttl_seconds == 604800
+    assert settings.response_cache_exact_prefix == "chat:exact"
+    assert settings.response_cache_semantic_index == "chat_semantic_cache"
+    assert settings.response_cache_distance_threshold == 0.10
+    assert settings.response_cache_max_results == 3
+    assert settings.response_cache_store_private_sessions is False
+    assert settings.response_cache_knowledge_base_version == "personal_knowledge_base"
 
 
 def test_get_settings_uses_configured_chunking_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,6 +212,38 @@ def test_get_settings_uses_configured_feedback_export_flags(
     assert settings.allow_raw_production_text_in_evals is True
 
 
+def test_get_settings_uses_configured_response_cache_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_RESPONSE_CACHE", "true")
+    monkeypatch.setenv("RESPONSE_CACHE_PROVIDER", "redis")
+    monkeypatch.setenv("REDIS_URL", "redis://cache.internal:6379/2")
+    monkeypatch.setenv("ENABLE_EXACT_RESPONSE_CACHE", "false")
+    monkeypatch.setenv("ENABLE_SEMANTIC_RESPONSE_CACHE", "true")
+    monkeypatch.setenv("RESPONSE_CACHE_TTL_SECONDS", "3600")
+    monkeypatch.setenv("RESPONSE_CACHE_EXACT_PREFIX", "chatbot:exact")
+    monkeypatch.setenv("RESPONSE_CACHE_SEMANTIC_INDEX", "chatbot_semantic")
+    monkeypatch.setenv("RESPONSE_CACHE_DISTANCE_THRESHOLD", "0.2")
+    monkeypatch.setenv("RESPONSE_CACHE_MAX_RESULTS", "5")
+    monkeypatch.setenv("RESPONSE_CACHE_STORE_PRIVATE_SESSIONS", "true")
+    monkeypatch.setenv("RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION", "kb-v2")
+
+    settings = get_settings()
+
+    assert settings.enable_response_cache is True
+    assert settings.response_cache_provider == "redis"
+    assert settings.redis_url == "redis://cache.internal:6379/2"
+    assert settings.enable_exact_response_cache is False
+    assert settings.enable_semantic_response_cache is True
+    assert settings.response_cache_ttl_seconds == 3600
+    assert settings.response_cache_exact_prefix == "chatbot:exact"
+    assert settings.response_cache_semantic_index == "chatbot_semantic"
+    assert settings.response_cache_distance_threshold == 0.2
+    assert settings.response_cache_max_results == 5
+    assert settings.response_cache_store_private_sessions is True
+    assert settings.response_cache_knowledge_base_version == "kb-v2"
+
+
 @pytest.mark.parametrize(
     ("env_name", "env_value", "expected_message"),
     [
@@ -211,6 +256,8 @@ def test_get_settings_uses_configured_feedback_export_flags(
         ("QUERY_REWRITE_MAX_TOKENS", "0", "QUERY_REWRITE_MAX_TOKENS must be greater than 0."),
         ("RERANKER_INITIAL_TOP_K", "0", "RERANKER_INITIAL_TOP_K must be greater than 0."),
         ("RERANKER_FINAL_TOP_K", "0", "RERANKER_FINAL_TOP_K must be greater than 0."),
+        ("RESPONSE_CACHE_TTL_SECONDS", "0", "RESPONSE_CACHE_TTL_SECONDS must be greater than 0."),
+        ("RESPONSE_CACHE_MAX_RESULTS", "0", "RESPONSE_CACHE_MAX_RESULTS must be greater than 0."),
         ("LANGFUSE_SAMPLE_RATE", "-0.1", "LANGFUSE_SAMPLE_RATE must be greater than or equal to 0."),
         ("LANGFUSE_EXPORT_DEFAULT_LIMIT", "0", "LANGFUSE_EXPORT_DEFAULT_LIMIT must be greater than 0."),
     ],
@@ -249,6 +296,19 @@ def test_get_settings_rejects_invalid_reranker_type(
         get_settings()
 
 
+def test_get_settings_rejects_invalid_response_cache_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RESPONSE_CACHE_PROVIDER", "memory")
+
+    supported_values = ", ".join(sorted(SUPPORTED_RESPONSE_CACHE_PROVIDERS))
+    with pytest.raises(
+        ValueError,
+        match=f"RESPONSE_CACHE_PROVIDER must be one of: {supported_values}.",
+    ):
+        get_settings()
+
+
 def test_get_settings_rejects_invalid_llm_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,6 +337,18 @@ def test_get_settings_rejects_langfuse_sample_rate_above_one(
     with pytest.raises(
         ValueError,
         match="LANGFUSE_SAMPLE_RATE must be less than or equal to 1.0.",
+    ):
+        get_settings()
+
+
+def test_get_settings_rejects_response_cache_distance_threshold_above_two(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RESPONSE_CACHE_DISTANCE_THRESHOLD", "2.1")
+
+    with pytest.raises(
+        ValueError,
+        match="RESPONSE_CACHE_DISTANCE_THRESHOLD must be less than or equal to 2.0.",
     ):
         get_settings()
 

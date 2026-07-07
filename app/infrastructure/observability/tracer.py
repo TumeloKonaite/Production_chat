@@ -43,6 +43,7 @@ class ObservabilityTracer(Protocol):
         channel: str,
         llm_provider: str | None,
         llm_model: str | None,
+        metadata: dict[str, object] | None = None,
     ) -> ObservabilityTrace:
         ...
 
@@ -109,6 +110,7 @@ class ObservabilityTracer(Protocol):
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         ...
 
@@ -179,9 +181,20 @@ class LangfuseTracer:
         channel: str,
         llm_provider: str | None,
         llm_model: str | None,
+        metadata: dict[str, object] | None = None,
     ) -> ObservabilityTrace:
         if not self._should_sample():
             return ObservabilityTrace()
+
+        root_metadata = {
+            "endpoint": endpoint,
+            "endpoint_name": endpoint_name,
+            "channel": channel,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+        }
+        if metadata:
+            root_metadata.update(metadata)
 
         root_observation = self._client.start_root_observation(
             name="chat_request",
@@ -189,13 +202,7 @@ class LangfuseTracer:
                 "question": question,
                 "conversation_id": conversation_id,
             },
-            metadata={
-                "endpoint": endpoint,
-                "endpoint_name": endpoint_name,
-                "channel": channel,
-                "llm_provider": llm_provider,
-                "llm_model": llm_model,
-            },
+            metadata=root_metadata,
             user_id=user_id,
             session_id=session_id or conversation_id,
             environment=self._environment,
@@ -351,13 +358,14 @@ class LangfuseTracer:
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         if not trace.is_active or trace.root_observation is None:
             return
 
         try:
-            trace.root_observation.update(
-                output={
+            update_payload: dict[str, object] = {
+                "output": {
                     "final_answer": final_answer,
                     "conversation_id": conversation_id,
                     "latency_ms": latency_ms,
@@ -367,7 +375,10 @@ class LangfuseTracer:
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
                 }
-            )
+            }
+            if metadata:
+                update_payload["metadata"] = metadata
+            trace.root_observation.update(**update_payload)
         finally:
             trace.root_observation.close()
 
