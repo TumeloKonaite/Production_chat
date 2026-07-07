@@ -21,7 +21,15 @@ from app.domain.tracing import TraceStatus, TraceStepType
 from app.infrastructure.llm import UnknownModelError
 from app.main import app
 from app.repositories.db.base import Base
-from app.repositories.models import ChatTrace, ChatTraceStep, Conversation, KnowledgeChunk, Message, RetrievalLog
+from app.repositories.models import (
+    ChatTrace,
+    ChatTraceStep,
+    Conversation,
+    KnowledgeChunk,
+    Message,
+    MessageFeedback,
+    RetrievalLog,
+)
 from app.services.llm import (
     LLMChatMessage,
     LLMGeneratedResponse,
@@ -279,6 +287,15 @@ def fetch_retrieval_logs(session_factory: sessionmaker[Session]) -> list[Retriev
         return list(session.scalars(statement))
 
 
+def fetch_message_feedback(session_factory: sessionmaker[Session]) -> list[MessageFeedback]:
+    with session_factory() as session:
+        statement = select(MessageFeedback).order_by(
+            MessageFeedback.created_at.asc(),
+            MessageFeedback.id.asc(),
+        )
+        return list(session.scalars(statement))
+
+
 def fetch_chat_traces(session_factory: sessionmaker[Session]) -> list[ChatTrace]:
     with session_factory() as session:
         statement = select(ChatTrace).order_by(ChatTrace.created_at.asc(), ChatTrace.id.asc())
@@ -339,6 +356,7 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
     body = response.json()
     assert body == {
         "conversation_id": body["conversation_id"],
+        "message_id": body["message_id"],
         "message": "Tumelo has worked on AI systems.",
         "model": "gpt-4.1-mini",
         "model_provider": "openai",
@@ -394,7 +412,7 @@ def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
     assert messages[1].output_tokens == 180
     assert messages[1].total_tokens == 1380
     assert messages[1].estimated_cost_usd == pytest.approx(0.000768)
-    assert messages[1].message_metadata == {}
+    assert isinstance(messages[1].message_metadata.get("trace_id"), str)
 
 
 def test_chat_creates_internal_trace_records(tmp_path) -> None:
@@ -951,3 +969,164 @@ def test_chat_rejects_unknown_prompt_version(tmp_path) -> None:
         "detail": "Unknown prompt version: v999_unknown. Available versions: v1_professional, v2_warm_conversational"
     }
     assert fetch_messages(session_factory) == []
+
+
+def test_submit_feedback_stores_thumbs_up_for_assistant_message(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Helpful assistant response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot work"})
+    message_id = chat_response.json()["message_id"]
+
+    response = client.post(
+        f"/api/chat/messages/{message_id}/feedback",
+        json={"rating": "up"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert chat_response.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["message_id"] == message_id
+    assert response.json()["rating"] == "up"
+    assert response.json()["comment"] is None
+
+    feedback_records = fetch_message_feedback(session_factory)
+    assert len(feedback_records) == 1
+    assert feedback_records[0].message_id == message_id
+    assert feedback_records[0].conversation_id == chat_response.json()["conversation_id"]
+    assert feedback_records[0].rating == "up"
+    assert feedback_records[0].comment is None
+    assert feedback_records[0].trace_id is not None
+    assert feedback_records[0].feedback_metadata["model_config_id"] == "openai:gpt-4.1-mini"
+    assert feedback_records[0].feedback_metadata["prompt_version"] == "v1_professional"
+    assert feedback_records[0].feedback_metadata["channel"] == "web_chat"
+
+    traces = fetch_chat_traces(session_factory)
+    assert len(traces) == 1
+    assert traces[0].trace_metadata["feedback"] == {
+        "rating": "up",
+        "thumb_rating": "up",
+        "feedback_rating": "positive",
+        "comment": None,
+        "feedback_comment": None,
+        "message_feedback_id": feedback_records[0].id,
+        "message_id": message_id,
+        "conversation_id": chat_response.json()["conversation_id"],
+        "trace_id": traces[0].id,
+    }
+
+
+def test_submit_feedback_stores_comment_with_thumbs_down(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Assistant response that needs correction.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's backend work"})
+    message_id = chat_response.json()["message_id"]
+
+    response = client.post(
+        f"/api/chat/messages/{message_id}/feedback",
+        json={
+            "rating": "down",
+            "comment": "The answer did not use the right source document.",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["rating"] == "down"
+    assert response.json()["comment"] == "The answer did not use the right source document."
+
+    feedback_records = fetch_message_feedback(session_factory)
+    assert len(feedback_records) == 1
+    assert feedback_records[0].rating == "down"
+    assert feedback_records[0].comment == "The answer did not use the right source document."
+
+
+def test_submit_feedback_rejects_invalid_rating(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Helpful assistant response.")
+    client, _, _ = build_test_client(tmp_path, fake_llm)
+
+    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo"})
+    message_id = chat_response.json()["message_id"]
+
+    response = client.post(
+        f"/api/chat/messages/{message_id}/feedback",
+        json={"rating": "sideways"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+
+
+def test_submit_feedback_returns_not_found_for_missing_message(tmp_path) -> None:
+    fake_llm = FakeLLMService()
+    client, _, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post(
+        f"/api/chat/messages/{uuid.uuid4()}/feedback",
+        json={"rating": "up"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Message not found."}
+
+
+def test_submit_feedback_rejects_user_message(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Assistant response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's work"})
+    user_message_id = fetch_messages(session_factory)[0].id
+
+    response = client.post(
+        f"/api/chat/messages/{user_message_id}/feedback",
+        json={"rating": "up"},
+    )
+
+    app.dependency_overrides.clear()
+
+    assert chat_response.status_code == 200
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Feedback can only be submitted for assistant messages."
+    }
+    assert fetch_message_feedback(session_factory) == []
+
+
+def test_submit_feedback_updates_existing_feedback_for_message(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Initial assistant response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's AI systems"})
+    message_id = chat_response.json()["message_id"]
+
+    first_response = client.post(
+        f"/api/chat/messages/{message_id}/feedback",
+        json={"rating": "up"},
+    )
+    second_response = client.post(
+        f"/api/chat/messages/{message_id}/feedback",
+        json={
+            "rating": "down",
+            "comment": "This answer missed the backend APIs.",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["id"] == second_response.json()["id"]
+    assert second_response.json()["rating"] == "down"
+    assert second_response.json()["comment"] == "This answer missed the backend APIs."
+
+    feedback_records = fetch_message_feedback(session_factory)
+    assert len(feedback_records) == 1
+    assert feedback_records[0].id == first_response.json()["id"]
+    assert feedback_records[0].rating == "down"
+    assert feedback_records[0].comment == "This answer missed the backend APIs."

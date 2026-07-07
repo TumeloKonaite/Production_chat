@@ -7,10 +7,11 @@ from app.api.dependencies.common_dependencies import get_app_settings, get_db_se
 from app.config import Settings
 from app.infrastructure.observability import ObservabilityTracer, get_tracer
 from app.infrastructure.prompts import PromptLoader
-from app.repositories import ConversationRepository, KnowledgeRepository
-from app.services.retrieval import RetrievalService
+from app.repositories import ConversationRepository, KnowledgeRepository, MessageFeedbackRepository
 from app.services.chat import ChatService
+from app.services.feedback import MessageFeedbackService
 from app.services.llm import LLMService
+from app.services.retrieval import RetrievalService
 from app.services.tracing import TraceService
 
 
@@ -38,6 +39,12 @@ def get_knowledge_repository(
     session: Session = Depends(get_db_session),
 ) -> KnowledgeRepository:
     return KnowledgeRepository(session=session)
+
+
+def get_feedback_repository(
+    session: Session = Depends(get_db_session),
+) -> MessageFeedbackRepository:
+    return MessageFeedbackRepository(session=session)
 
 
 def get_trace_service(
@@ -91,3 +98,9 @@ def get_chat_service(
         retrieval_top_k=settings.retrieval_top_k,
         settings=settings,
     )
+
+
+def get_feedback_service(
+    repository: MessageFeedbackRepository = Depends(get_feedback_repository),
+) -> MessageFeedbackService:
+    return MessageFeedbackService(repository=repository)

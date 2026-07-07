@@ -1,7 +1,12 @@
-from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Input schema for the user message submitted to the chat endpoint.
     message: str = Field(..., min_length=1, max_length=4000)
     conversation_id: str | None = Field(default=None, max_length=36)
@@ -24,8 +29,11 @@ class TokenUsageResponse(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Output schema for the assistant reply returned by the backend.
     conversation_id: str
+    message_id: str
     message: str
     model: str
     model_provider: str
@@ -36,3 +44,31 @@ class ChatResponse(BaseModel):
     latency_ms: int | None = None
     token_usage: TokenUsageResponse
     estimated_cost_usd: float | None = None
+
+
+class FeedbackCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def _normalize_comment(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+
+class FeedbackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    message_id: str
+    rating: Literal["up", "down"]
+    comment: str | None = None
+    created_at: datetime
+    updated_at: datetime

@@ -16,6 +16,11 @@ from app.services.chat import (
     InvalidChatMessageError,
     InvalidConversationIdError,
 )
+from app.services.feedback import (
+    InvalidFeedbackTargetError,
+    MessageFeedbackPersistenceError,
+    MessageFeedbackTargetNotFoundError,
+)
 from app.services.llm import LLMConfigurationError, LLMServiceError
 from app.services.retrieval import EmbeddingConfigurationError, VectorIndexConfigurationError
 from app.services.tavus import TavusConfigurationError, TavusServiceError
@@ -89,6 +94,26 @@ def create_app() -> FastAPI:
             content={"detail": str(exc)},
         )
 
+    @app.exception_handler(MessageFeedbackTargetNotFoundError)
+    async def handle_missing_feedback_message(
+        _: Request,
+        exc: MessageFeedbackTargetNotFoundError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(InvalidFeedbackTargetError)
+    async def handle_invalid_feedback_target(
+        _: Request,
+        exc: InvalidFeedbackTargetError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
     @app.exception_handler(LLMConfigurationError)
     async def handle_configuration_error(
         _: Request,
@@ -156,6 +181,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unable to save chat conversation. Please try again."},
+        )
+
+    @app.exception_handler(MessageFeedbackPersistenceError)
+    async def handle_feedback_persistence_error(
+        _: Request,
+        __: MessageFeedbackPersistenceError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Unable to save message feedback. Please try again."},
         )
 
     @app.exception_handler(ChatServiceError)
