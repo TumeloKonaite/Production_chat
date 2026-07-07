@@ -259,8 +259,8 @@ def main() -> None:
 
     settings = get_settings()
     tracker = create_experiment_tracker(settings, settings.mlflow_experiment_name)
-    prepare_knowledge_ingestion_storage(get_engine())
-    session_factory = get_session_factory()
+    prepare_knowledge_ingestion_storage(get_engine(use_direct=True))
+    session_factory = get_session_factory(use_direct=True)
     examples, validation_summary = load_and_validate_dataset(
         dataset_path,
         min_expected_source_coverage=args.min_expected_source_coverage,

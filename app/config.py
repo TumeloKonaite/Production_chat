@@ -145,6 +145,10 @@ class Settings:
         return self.resolved_redis_url is not None
 
     @property
+    def migration_database_url(self) -> str:
+        return self.database_direct_url or self.database_url
+
+    @property
     def supabase_configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_service_role_key)
 

@@ -8,6 +8,7 @@ import uuid
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.dependencies.chat_dependencies import (
@@ -515,6 +516,37 @@ def test_health_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_ready_returns_ok_when_database_is_reachable(tmp_path) -> None:
+    fake_llm = FakeLLMService()
+    client, _, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.get("/ready")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "database": "ok"}
+
+
+def test_ready_returns_service_unavailable_when_database_is_down() -> None:
+    class FailingSession:
+        def execute(self, *_args, **_kwargs) -> None:
+            raise SQLAlchemyError("database unavailable")
+
+    def override_db_session() -> Generator[FailingSession, None, None]:
+        yield FailingSession()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    client = TestClient(app)
+
+    response = client.get("/ready")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "degraded", "database": "unavailable"}
 
 
 def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None:

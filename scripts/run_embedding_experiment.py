@@ -148,7 +148,7 @@ def run_embedding_experiment_matrix(
         min_expected_source_coverage=min_expected_source_coverage,
     )
     print(format_dataset_validation_summary(validation_summary))
-    session_factory = get_session_factory()
+    session_factory = get_session_factory(use_direct=True)
     runs_output_dir = output_dir / "runs"
     runs_output_dir.mkdir(parents=True, exist_ok=True)
     comparison_rows: list[dict[str, Any]] = []
@@ -472,7 +472,7 @@ def main() -> None:
         raise SystemExit(str(exc)) from exc
 
     settings = get_settings()
-    prepare_knowledge_ingestion_storage(get_engine())
+    prepare_knowledge_ingestion_storage(get_engine(use_direct=True))
     try:
         rows, artifact_paths = run_embedding_experiment_matrix(
             experiment_config=experiment_config,
@@ -651,7 +651,7 @@ def _get_database_vector_store_dimension() -> int | None:
         """
     )
     try:
-        with get_engine().connect() as connection:
+        with get_engine(use_direct=True).connect() as connection:
             embedding_type = connection.execute(query).scalar_one_or_none()
     except Exception:
         return None
