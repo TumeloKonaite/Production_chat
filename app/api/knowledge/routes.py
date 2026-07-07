@@ -5,12 +5,16 @@ from contextlib import contextmanager
 from dataclasses import replace
 import secrets
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
-from app.api.dependencies.knowledge_dependencies import get_knowledge_ingestion_service_factory
+from app.api.dependencies.knowledge_dependencies import (
+    get_knowledge_file_upload_service,
+    get_knowledge_ingestion_service_factory,
+)
 from app.api.knowledge.schemas import (
+    KnowledgeFileUploadResponse,
     KnowledgeIngestionDocumentResponse,
     KnowledgeIngestionRequest,
     KnowledgeIngestionResponse,
@@ -18,6 +22,7 @@ from app.api.knowledge.schemas import (
 from app.config import Settings
 from app.infrastructure.tracking import TrackingSetupError, create_experiment_tracker
 from app.knowledge.ingestion import KnowledgeIngestionService
+from app.services.knowledge_files import KnowledgeFileUploadService
 
 router = APIRouter(prefix="/api/knowledge", tags=["Knowledge"])
 
@@ -59,6 +64,25 @@ def ingest_knowledge_endpoint(
             for document_result in result.results
         ],
     )
+
+
+@router.post(
+    "/files",
+    response_model=KnowledgeFileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_knowledge_file_endpoint(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+    upload_service: KnowledgeFileUploadService = Depends(get_knowledge_file_upload_service),
+) -> KnowledgeFileUploadResponse:
+    record = upload_service.upload_file(
+        session,
+        filename=file.filename,
+        content_type=file.content_type,
+        file_bytes=await file.read(),
+    )
+    return KnowledgeFileUploadResponse.model_validate(record)
 
 
 def _resolve_effective_settings(

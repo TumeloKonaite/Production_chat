@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -59,3 +60,17 @@ class KnowledgeIngestionResponse(BaseModel):
     documents_loaded: int
     chunks_created: int
     results: list[KnowledgeIngestionDocumentResponse]
+
+
+class KnowledgeFileUploadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    original_filename: str
+    content_type: str | None
+    file_size_bytes: int
+    storage_provider: str
+    storage_bucket: str
+    storage_path: str
+    status: Literal["uploaded", "ingesting", "ingested", "failed", "deleted"]
+    created_at: datetime

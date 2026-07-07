@@ -25,6 +25,7 @@ SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
+SUPPORTED_STORAGE_PROVIDERS = frozenset({"local", "minio"})
 SUPPORTED_VECTOR_STORE_PROVIDERS = frozenset({"pgvector", "supabase_pgvector"})
 
 
@@ -66,6 +67,14 @@ class Settings:
     frontend_origin: str | None = None
     database_direct_url: str | None = None
     vector_store_provider: str = "pgvector"
+    storage_provider: str = "minio"
+    minio_endpoint: str = "http://localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "knowledge-files"
+    minio_secure: bool = False
+    local_storage_path: str = ".storage"
+    knowledge_upload_max_bytes: int = 10485760
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
     supabase_storage_bucket: str | None = None
@@ -418,6 +427,11 @@ def get_settings() -> Settings:
         "pgvector",
         supported_values=SUPPORTED_VECTOR_STORE_PROVIDERS,
     )
+    storage_provider = _get_choice_env(
+        "STORAGE_PROVIDER",
+        "minio",
+        supported_values=SUPPORTED_STORAGE_PROVIDERS,
+    )
     supabase_url = _get_non_empty_env("SUPABASE_URL")
     supabase_service_role_key = _get_non_empty_env("SUPABASE_SERVICE_ROLE_KEY")
     if vector_store_provider == "supabase_pgvector" and supabase_url is None:
@@ -574,6 +588,33 @@ def get_settings() -> Settings:
         retrieval_min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.55")),
         default_retrieval_config=os.getenv("DEFAULT_RETRIEVAL_CONFIG", "default"),
         vector_store_provider=vector_store_provider,
+        storage_provider=storage_provider,
+        minio_endpoint=(
+            _get_non_empty_env("MINIO_ENDPOINT", default="http://localhost:9000")
+            or "http://localhost:9000"
+        ),
+        minio_access_key=(
+            _get_non_empty_env("MINIO_ACCESS_KEY", default="minioadmin")
+            or "minioadmin"
+        ),
+        minio_secret_key=(
+            _get_non_empty_env("MINIO_SECRET_KEY", default="minioadmin")
+            or "minioadmin"
+        ),
+        minio_bucket=(
+            _get_non_empty_env("MINIO_BUCKET", default="knowledge-files")
+            or "knowledge-files"
+        ),
+        minio_secure=_parse_bool(os.getenv("MINIO_SECURE"), default=False),
+        local_storage_path=(
+            _get_non_empty_env("LOCAL_STORAGE_PATH", default=".storage")
+            or ".storage"
+        ),
+        knowledge_upload_max_bytes=_get_int_env(
+            "KNOWLEDGE_UPLOAD_MAX_BYTES",
+            10485760,
+            minimum=1,
+        ),
         supabase_url=supabase_url,
         supabase_service_role_key=supabase_service_role_key,
         supabase_storage_bucket=_get_non_empty_env("SUPABASE_STORAGE_BUCKET"),

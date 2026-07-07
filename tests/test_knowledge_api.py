@@ -59,6 +59,14 @@ def build_test_settings() -> Settings:
         dagshub_repo_owner=None,
         dagshub_repo_name=None,
         dagshub_token=None,
+        storage_provider="local",
+        minio_endpoint="http://localhost:9000",
+        minio_access_key="minioadmin",
+        minio_secret_key="minioadmin",
+        minio_bucket="knowledge-files",
+        minio_secure=False,
+        local_storage_path=".pytest_tmp/storage",
+        knowledge_upload_max_bytes=10485760,
     )
 
 
@@ -339,3 +347,4 @@ def test_knowledge_routes_are_registered() -> None:
     paths = set(app.openapi()["paths"])
 
     assert "/api/knowledge/ingest" in paths
+    assert "/api/knowledge/files" in paths

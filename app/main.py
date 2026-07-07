@@ -29,6 +29,7 @@ from app.services.feedback import (
     MessageFeedbackPersistenceError,
     MessageFeedbackTargetNotFoundError,
 )
+from app.services.knowledge_files import KnowledgeFileUploadError, KnowledgeFileValidationError
 from app.services.llm import LLMConfigurationError, LLMServiceError
 from app.services.rate_limiting import (
     RateLimitExceededError,
@@ -206,6 +207,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Unable to ingest knowledge. Please try again."},
+        )
+
+    @app.exception_handler(KnowledgeFileValidationError)
+    async def handle_knowledge_file_validation_error(
+        _: Request,
+        exc: KnowledgeFileValidationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(KnowledgeFileUploadError)
+    async def handle_knowledge_file_upload_error(
+        _: Request,
+        __: KnowledgeFileUploadError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Unable to upload knowledge file. Please try again."},
         )
 
     @app.exception_handler(LLMServiceError)

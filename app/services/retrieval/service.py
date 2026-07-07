@@ -533,6 +533,8 @@ class RetrievalService:
                 if table_name is None:
                     return
 
+                vector_dimension = self._get_vector_column_dimension()
+
                 session.execute(
                     text(
                         """
@@ -541,16 +543,18 @@ class RetrievalService:
                         """
                     )
                 )
-                session.execute(
-                    text(
-                        f"""
-                        CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_{index_suffix}_ivfflat
-                        ON langchain_pg_embedding
-                        USING ivfflat (embedding {operator_class})
-                        WITH (lists = {DEFAULT_PGVECTOR_IVFFLAT_LISTS})
-                        """
+
+                if vector_dimension is not None:
+                    session.execute(
+                        text(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_{index_suffix}_ivfflat
+                            ON langchain_pg_embedding
+                            USING ivfflat (embedding {operator_class})
+                            WITH (lists = {DEFAULT_PGVECTOR_IVFFLAT_LISTS})
+                            """
+                        )
                     )
-                )
                 session.execute(text("ANALYZE langchain_pg_embedding"))
                 session.commit()
         except Exception:

@@ -8,6 +8,7 @@ from app.services.retrieval import (
     UnsupportedRetrieverError,
     VectorIndexConfigurationError,
 )
+from app.services.retrieval.service import ENSURED_PGVECTOR_INDEXES
 
 
 class FakeVectorStore:
@@ -135,6 +136,12 @@ class IndexAwareVectorStore(MetadataAwareVectorStore):
 
     def get_bind(self) -> FakeBind:
         return FakeBind()
+
+
+class DimensionlessIndexAwareVectorStore(IndexAwareVectorStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._vector_dimension = None
 
 
 class FakeKnowledgeRepository:
@@ -383,6 +390,35 @@ def test_replace_all_chunks_ensures_pgvector_indexes_for_postgres_vector_store()
         for sql in vectorstore.executed_sql
     )
     assert any(
+        "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_cosine_ivfflat" in sql
+        for sql in vectorstore.executed_sql
+    )
+    assert vectorstore.commits == 1
+
+
+def test_replace_all_chunks_skips_ivfflat_index_for_dimensionless_pgvector_column() -> None:
+    vectorstore = DimensionlessIndexAwareVectorStore()
+    ENSURED_PGVECTOR_INDEXES.clear()
+    retrieval_service = RetrievalService(settings=build_settings(), vectorstore=vectorstore)
+
+    retrieval_service.replace_all_chunks(
+        [
+            KnowledgeChunk(
+                id="chunk-1",
+                source="projects.md",
+                source_type="markdown",
+                section="Projects",
+                content="Tumelo built a FastAPI retrieval chatbot.",
+                chunk_metadata={"chunk_index": 0},
+            )
+        ]
+    )
+
+    assert any(
+        "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_collection_id" in sql
+        for sql in vectorstore.executed_sql
+    )
+    assert not any(
         "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_cosine_ivfflat" in sql
         for sql in vectorstore.executed_sql
     )
