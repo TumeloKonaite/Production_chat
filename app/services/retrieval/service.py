@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from math import isqrt
 import logging
 import re
 from typing import Any
@@ -533,30 +534,57 @@ class RetrievalService:
                 if table_name is None:
                     return
 
-                vector_dimension = self._get_vector_column_dimension()
+                collection = self.vectorstore.get_collection(session)
+                if collection is None:
+                    return
 
-                session.execute(
-                    text(
-                        """
-                        CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_collection_id
-                        ON langchain_pg_embedding (collection_id)
-                        """
-                    )
+                vector_dimension = self._get_vector_column_dimension()
+                indexed_document_count = self._get_indexed_document_count(
+                    session=session,
+                    collection_uuid=collection.uuid,
+                )
+                collection_index_sql = text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_collection_id
+                    ON langchain_pg_embedding (collection_id)
+                    """
                 )
 
-                if vector_dimension is not None:
-                    session.execute(
-                        text(
-                            f"""
-                            CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_{index_suffix}_ivfflat
-                            ON langchain_pg_embedding
-                            USING ivfflat (embedding {operator_class})
-                            WITH (lists = {DEFAULT_PGVECTOR_IVFFLAT_LISTS})
-                            """
-                        )
+                if vector_dimension is None:
+                    session.execute(collection_index_sql)
+                    session.execute(text("ANALYZE langchain_pg_embedding"))
+                    session.commit()
+                else:
+                    ivfflat_lists_candidates = self._build_ivfflat_list_candidates(
+                        indexed_document_count=indexed_document_count
                     )
-                session.execute(text("ANALYZE langchain_pg_embedding"))
-                session.commit()
+                    for ivfflat_lists in ivfflat_lists_candidates:
+                        try:
+                            session.execute(collection_index_sql)
+                            session.execute(
+                                text(
+                                    f"""
+                                    CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_{index_suffix}_ivfflat
+                                    ON langchain_pg_embedding
+                                    USING ivfflat (embedding {operator_class})
+                                    WITH (lists = {ivfflat_lists})
+                                    """
+                                )
+                            )
+                            session.execute(text("ANALYZE langchain_pg_embedding"))
+                            session.commit()
+                            break
+                        except Exception:
+                            session.rollback()
+                    else:
+                        logger.warning(
+                            "Unable to build IVFFlat index for collection %s after trying lists=%s. "
+                            "Continuing without the approximate vector index.",
+                            self._settings.knowledge_collection_name,
+                            list(ivfflat_lists_candidates),
+                        )
+                        session.execute(collection_index_sql)
+                        session.commit()
         except Exception:
             logger.warning(
                 "Unable to ensure pgvector indexes for collection %s.",
@@ -566,6 +594,26 @@ class RetrievalService:
             return
 
         ENSURED_PGVECTOR_INDEXES.add(cache_key)
+
+    def _build_ivfflat_list_candidates(self, *, indexed_document_count: int) -> tuple[int, ...]:
+        if indexed_document_count <= 0:
+            return (1,)
+
+        initial_lists = max(
+            1,
+            min(
+                DEFAULT_PGVECTOR_IVFFLAT_LISTS,
+                indexed_document_count,
+                isqrt(indexed_document_count),
+            ),
+        )
+
+        candidates: list[int] = []
+        for raw_value in (initial_lists, max(1, initial_lists // 2), 1):
+            value = min(indexed_document_count, raw_value)
+            if value not in candidates:
+                candidates.append(value)
+        return tuple(candidates)
 
     def _resolve_pgvector_distance_metric(self) -> str | None:
         strategy = getattr(self.vectorstore, "_distance_strategy", None)

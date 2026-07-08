@@ -144,17 +144,16 @@ RERANKER_TYPE=none
 RERANKER_MODEL=openai:gpt-4.1-mini
 RERANKER_INITIAL_TOP_K=20
 RERANKER_FINAL_TOP_K=5
-ENABLE_RESPONSE_CACHE=false
-RESPONSE_CACHE_PROVIDER=redis
-REDIS_URL=redis://localhost:6379/0
-ENABLE_EXACT_RESPONSE_CACHE=true
-ENABLE_SEMANTIC_RESPONSE_CACHE=false
-RESPONSE_CACHE_TTL_SECONDS=604800
-RESPONSE_CACHE_EXACT_PREFIX=chat:exact
-RESPONSE_CACHE_SEMANTIC_INDEX=chat_semantic_cache
-RESPONSE_CACHE_DISTANCE_THRESHOLD=0.10
-RESPONSE_CACHE_MAX_RESULTS=3
-RESPONSE_CACHE_STORE_PRIVATE_SESSIONS=false
+ENABLE_REDIS=false
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS=20
+RATE_LIMIT_WINDOW_SECONDS=60
+EXACT_CACHE_ENABLED=true
+EXACT_CACHE_TTL_SECONDS=300
+REQUEST_LOCK_ENABLED=true
+REQUEST_LOCK_TTL_SECONDS=30
 RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION=personal_knowledge_base
 ENABLE_MLFLOW_TRACKING=false
 MLFLOW_TRACKING_URI=
@@ -184,12 +183,6 @@ Install dependencies:
 
 ```bash
 uv sync
-```
-
-Install the optional Redis response-cache dependencies only when you want to enable response caching locally:
-
-```bash
-uv sync --extra response-cache
 ```
 
 Run the database migration:
@@ -255,30 +248,29 @@ Run the API:
 uvicorn main:app --reload
 ```
 
-### Response cache
-
-Response caching is disabled by default. When enabled, the chat service checks a Redis exact-match cache before retrieval, then optionally checks a RedisVL semantic cache before running the normal RAG and LLM path.
+### Upstash Redis
 
 Set:
 
 ```env
-ENABLE_RESPONSE_CACHE=true
-RESPONSE_CACHE_PROVIDER=redis
-REDIS_URL=redis://localhost:6379/0
-ENABLE_EXACT_RESPONSE_CACHE=true
-ENABLE_SEMANTIC_RESPONSE_CACHE=false
-RESPONSE_CACHE_TTL_SECONDS=604800
-RESPONSE_CACHE_DISTANCE_THRESHOLD=0.10
-RESPONSE_CACHE_MAX_RESULTS=3
+ENABLE_REDIS=true
+UPSTASH_REDIS_REST_URL=https://...upstash.io
+UPSTASH_REDIS_REST_TOKEN=...
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS=20
+RATE_LIMIT_WINDOW_SECONDS=60
+EXACT_CACHE_ENABLED=true
+EXACT_CACHE_TTL_SECONDS=300
+REQUEST_LOCK_ENABLED=true
+REQUEST_LOCK_TTL_SECONDS=30
 RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION=personal_knowledge_base
 ```
 
-- Exact caching works with plain Redis.
-- Semantic caching requires the optional `response-cache` dependencies and a Redis server with RediSearch support, such as `redis/redis-stack-server`.
-- If you run the API on your host and Redis in Docker on Windows, prefer `REDIS_URL=redis://127.0.0.1:6379/0` to avoid IPv6 `localhost` resolution issues.
-- Cache hits skip retrieval and LLM generation; semantic hits reuse the retrieval embedding and skip the LLM path.
-- The cache is scoped by knowledge-base version, prompt version, model, embedding model, and retrieval configuration to avoid stale reuse.
-- Redis failures degrade gracefully to the normal chat path.
+- Redis stays disabled by default for local development.
+- When enabled, the public chat endpoint uses Upstash Redis for fixed-window rate limiting, exact response caching, and short-lived duplicate request locks.
+- Cache hits skip retrieval and LLM generation.
+- The cache is scoped by knowledge-base version, prompt version, model, and retrieval configuration to avoid unsafe reuse.
+- Redis failures degrade gracefully to the normal chat path, while `/ready` still reports Redis readiness separately.
 
 ## Docker Compose
 
@@ -438,7 +430,7 @@ Production vector retrieval uses Supabase Postgres with pgvector through LangCha
 The production retrieval path assumes cosine distance and creates:
 
 - a btree index on `langchain_pg_embedding.collection_id`
-- an IVFFlat index on `langchain_pg_embedding.embedding` using `vector_cosine_ops` with `lists = 100`
+- an IVFFlat index on `langchain_pg_embedding.embedding` using `vector_cosine_ops` with an adaptive `lists` value up to `100`
 
 That keeps the Supabase path simple while staying aligned with the current similarity query behavior.
 

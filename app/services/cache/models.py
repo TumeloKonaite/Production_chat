@@ -39,6 +39,7 @@ class CacheScope:
 
 @dataclass(frozen=True, slots=True)
 class CacheLookupRequest:
+    request_hash: str
     normalized_question: str
     question_hash: str
     metadata_scope_hash: str

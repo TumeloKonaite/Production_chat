@@ -110,17 +110,19 @@ class FakeBind:
 
 
 class IndexAwareVectorStore(MetadataAwareVectorStore):
-    def __init__(self) -> None:
+    def __init__(self, *, document_count: int = 1) -> None:
         super().__init__(
             collection_metadata={
                 "embedding_provider": "hf",
                 "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
                 "embedding_dimension": 384,
             },
+            document_count=document_count,
             vector_dimension="vector(384)",
         )
         self.executed_sql: list[str] = []
         self.commits = 0
+        self.rollbacks = 0
 
     def execute(self, statement) -> "IndexAwareVectorStore":
         sql_text = str(statement)
@@ -133,6 +135,9 @@ class IndexAwareVectorStore(MetadataAwareVectorStore):
 
     def commit(self) -> None:
         self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
 
     def get_bind(self) -> FakeBind:
         return FakeBind()
@@ -368,7 +373,8 @@ def test_replace_all_chunks_records_embedding_metadata_on_vector_documents() -> 
 
 
 def test_replace_all_chunks_ensures_pgvector_indexes_for_postgres_vector_store() -> None:
-    vectorstore = IndexAwareVectorStore()
+    vectorstore = IndexAwareVectorStore(document_count=10_000)
+    ENSURED_PGVECTOR_INDEXES.clear()
     retrieval_service = RetrievalService(settings=build_settings(), vectorstore=vectorstore)
 
     retrieval_service.replace_all_chunks(
@@ -393,6 +399,46 @@ def test_replace_all_chunks_ensures_pgvector_indexes_for_postgres_vector_store()
         "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_cosine_ivfflat" in sql
         for sql in vectorstore.executed_sql
     )
+    assert vectorstore.commits == 1
+
+
+class RetryIndexAwareVectorStore(IndexAwareVectorStore):
+    def __init__(self) -> None:
+        super().__init__(document_count=10_000)
+
+    def execute(self, statement) -> "RetryIndexAwareVectorStore":
+        sql_text = str(statement)
+        self.executed_sql.append(sql_text)
+        self._last_scalar = "langchain_pg_embedding" if "to_regclass" in sql_text else None
+        if (
+            "CREATE INDEX IF NOT EXISTS ix_langchain_pg_embedding_embedding_cosine_ivfflat" in sql_text
+            and "WITH (lists = 100)" in sql_text
+        ):
+            raise RuntimeError("Simulated maintenance_work_mem limit")
+        return self
+
+
+def test_replace_all_chunks_retries_pgvector_ivfflat_with_lower_lists_on_failure() -> None:
+    vectorstore = RetryIndexAwareVectorStore()
+    ENSURED_PGVECTOR_INDEXES.clear()
+    retrieval_service = RetrievalService(settings=build_settings(), vectorstore=vectorstore)
+
+    retrieval_service.replace_all_chunks(
+        [
+            KnowledgeChunk(
+                id="chunk-1",
+                source="projects.md",
+                source_type="markdown",
+                section="Projects",
+                content="Tumelo built a FastAPI retrieval chatbot.",
+                chunk_metadata={"chunk_index": 0},
+            )
+        ]
+    )
+
+    assert any("WITH (lists = 100)" in sql for sql in vectorstore.executed_sql)
+    assert any("WITH (lists = 50)" in sql for sql in vectorstore.executed_sql)
+    assert vectorstore.rollbacks == 1
     assert vectorstore.commits == 1
 
 

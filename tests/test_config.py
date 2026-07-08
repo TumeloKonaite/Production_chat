@@ -102,6 +102,16 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("LANGFUSE_RELEASE", raising=False)
     monkeypatch.delenv("LANGFUSE_SAMPLE_RATE", raising=False)
     monkeypatch.delenv("LANGFUSE_EXPORT_DEFAULT_LIMIT", raising=False)
+    monkeypatch.delenv("ENABLE_REDIS", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_MAX_REQUESTS", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_WINDOW_SECONDS", raising=False)
+    monkeypatch.delenv("EXACT_CACHE_ENABLED", raising=False)
+    monkeypatch.delenv("EXACT_CACHE_TTL_SECONDS", raising=False)
+    monkeypatch.delenv("REQUEST_LOCK_ENABLED", raising=False)
+    monkeypatch.delenv("REQUEST_LOCK_TTL_SECONDS", raising=False)
     monkeypatch.delenv("ENABLE_RESPONSE_CACHE", raising=False)
     monkeypatch.delenv("RESPONSE_CACHE_PROVIDER", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
@@ -165,6 +175,16 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.langfuse_export_default_limit == 100
     assert settings.enable_production_feedback_export is False
     assert settings.allow_raw_production_text_in_evals is False
+    assert settings.enable_redis is False
+    assert settings.upstash_redis_rest_url is None
+    assert settings.upstash_redis_rest_token is None
+    assert settings.rate_limit_enabled is True
+    assert settings.rate_limit_max_requests == 20
+    assert settings.rate_limit_window_seconds == 60
+    assert settings.exact_cache_enabled is True
+    assert settings.exact_cache_ttl_seconds == 300
+    assert settings.request_lock_enabled is True
+    assert settings.request_lock_ttl_seconds == 30
     assert settings.enable_response_cache is False
     assert settings.response_cache_provider == "redis"
     assert settings.redis_url == "redis://localhost:6379/0"
@@ -286,63 +306,48 @@ def test_get_settings_uses_configured_feedback_export_flags(
     assert settings.allow_raw_production_text_in_evals is True
 
 
-def test_get_settings_uses_configured_response_cache_values(
+def test_get_settings_uses_configured_upstash_redis_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_RESPONSE_CACHE", "true")
-    monkeypatch.setenv("RESPONSE_CACHE_PROVIDER", "redis")
-    monkeypatch.setenv("REDIS_URL", "redis://cache.internal:6379/2")
-    monkeypatch.setenv("REDIS_TOKEN", "upstash-token")
-    monkeypatch.setenv("ENABLE_EXACT_RESPONSE_CACHE", "false")
-    monkeypatch.setenv("ENABLE_SEMANTIC_RESPONSE_CACHE", "true")
-    monkeypatch.setenv("RESPONSE_CACHE_TTL_SECONDS", "3600")
-    monkeypatch.setenv("RESPONSE_CACHE_EXACT_PREFIX", "chatbot:exact")
-    monkeypatch.setenv("RESPONSE_CACHE_SEMANTIC_INDEX", "chatbot_semantic")
-    monkeypatch.setenv("RESPONSE_CACHE_DISTANCE_THRESHOLD", "0.2")
-    monkeypatch.setenv("RESPONSE_CACHE_MAX_RESULTS", "5")
-    monkeypatch.setenv("RESPONSE_CACHE_STORE_PRIVATE_SESSIONS", "true")
+    monkeypatch.setenv("ENABLE_REDIS", "true")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://cache.internal")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "upstash-token")
+    monkeypatch.setenv("EXACT_CACHE_ENABLED", "true")
+    monkeypatch.setenv("EXACT_CACHE_TTL_SECONDS", "3600")
+    monkeypatch.setenv("REQUEST_LOCK_ENABLED", "false")
+    monkeypatch.setenv("REQUEST_LOCK_TTL_SECONDS", "45")
     monkeypatch.setenv("RESPONSE_CACHE_KNOWLEDGE_BASE_VERSION", "kb-v2")
 
     settings = get_settings()
 
-    assert settings.enable_response_cache is True
-    assert settings.response_cache_provider == "redis"
-    assert settings.redis_url == "redis://cache.internal:6379/2"
-    assert settings.redis_token == "upstash-token"
-    assert settings.resolved_redis_url == "redis://default:upstash-token@cache.internal:6379/2"
+    assert settings.enable_redis is True
+    assert settings.upstash_redis_rest_url == "https://cache.internal"
+    assert settings.upstash_redis_rest_token == "upstash-token"
     assert settings.redis_healthcheck_enabled is True
-    assert settings.enable_exact_response_cache is False
-    assert settings.enable_semantic_response_cache is True
-    assert settings.response_cache_ttl_seconds == 3600
-    assert settings.response_cache_exact_prefix == "chatbot:exact"
-    assert settings.response_cache_semantic_index == "chatbot_semantic"
-    assert settings.response_cache_distance_threshold == 0.2
-    assert settings.response_cache_max_results == 5
-    assert settings.response_cache_store_private_sessions is True
+    assert settings.exact_cache_enabled is True
+    assert settings.exact_cache_ttl_seconds == 3600
+    assert settings.request_lock_enabled is False
+    assert settings.request_lock_ttl_seconds == 45
     assert settings.response_cache_knowledge_base_version == "kb-v2"
 
 
-def test_get_settings_uses_configured_rate_limiting_values(
+def test_get_settings_uses_configured_fixed_window_rate_limit_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_RATE_LIMITING", "true")
-    monkeypatch.setenv("RATE_LIMITING_FAIL_OPEN", "false")
-    monkeypatch.setenv("CHAT_RATE_LIMIT_REQUESTS_PER_10_MINUTES", "12")
-    monkeypatch.setenv("CHAT_RATE_LIMIT_REQUESTS_PER_DAY", "45")
-    monkeypatch.setenv("CHAT_RATE_LIMIT_CONCURRENT_REQUESTS", "2")
-    monkeypatch.setenv("CHAT_RATE_LIMIT_DAILY_TOKEN_BUDGET", "9000")
-    monkeypatch.setenv("CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD", "1.25")
+    monkeypatch.setenv("ENABLE_REDIS", "true")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://cache.internal")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "upstash-token")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("RATE_LIMIT_MAX_REQUESTS", "12")
+    monkeypatch.setenv("RATE_LIMIT_WINDOW_SECONDS", "45")
 
     settings = get_settings()
 
-    assert settings.enable_rate_limiting is True
+    assert settings.enable_redis is True
     assert settings.redis_healthcheck_enabled is True
-    assert settings.rate_limiting_fail_open is False
-    assert settings.chat_rate_limit_requests_per_10_minutes == 12
-    assert settings.chat_rate_limit_requests_per_day == 45
-    assert settings.chat_rate_limit_concurrent_requests == 2
-    assert settings.chat_rate_limit_daily_token_budget == 9000
-    assert settings.chat_rate_limit_daily_cost_budget_usd == 1.25
+    assert settings.rate_limit_enabled is True
+    assert settings.rate_limit_max_requests == 12
+    assert settings.rate_limit_window_seconds == 45
 
 
 def test_get_settings_uses_configured_app_and_supabase_values(
@@ -479,6 +484,10 @@ def test_get_settings_uses_runtime_database_url_for_migrations_when_direct_url_i
         ("CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD", "-0.1", "CHAT_RATE_LIMIT_DAILY_COST_BUDGET_USD must be greater than or equal to 0."),
         ("LANGFUSE_SAMPLE_RATE", "-0.1", "LANGFUSE_SAMPLE_RATE must be greater than or equal to 0."),
         ("LANGFUSE_EXPORT_DEFAULT_LIMIT", "0", "LANGFUSE_EXPORT_DEFAULT_LIMIT must be greater than 0."),
+        ("RATE_LIMIT_MAX_REQUESTS", "0", "RATE_LIMIT_MAX_REQUESTS must be greater than 0."),
+        ("RATE_LIMIT_WINDOW_SECONDS", "0", "RATE_LIMIT_WINDOW_SECONDS must be greater than 0."),
+        ("EXACT_CACHE_TTL_SECONDS", "0", "EXACT_CACHE_TTL_SECONDS must be greater than 0."),
+        ("REQUEST_LOCK_TTL_SECONDS", "0", "REQUEST_LOCK_TTL_SECONDS must be greater than 0."),
     ],
 )
 def test_get_settings_rejects_invalid_chunking_values(
@@ -658,6 +667,20 @@ def test_get_settings_requires_llm_api_key_in_production(
     with pytest.raises(
         ValueError,
         match="LLM_API_KEY or OPENAI_API_KEY must be set when APP_ENV=production.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_upstash_credentials_when_redis_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_REDIS", "true")
+    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required when ENABLE_REDIS=true.",
     ):
         get_settings()
 

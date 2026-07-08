@@ -113,6 +113,16 @@ class Settings:
     langfuse_export_default_limit: int = 100
     enable_production_feedback_export: bool = False
     allow_raw_production_text_in_evals: bool = False
+    enable_redis: bool = False
+    upstash_redis_rest_url: str | None = None
+    upstash_redis_rest_token: str | None = None
+    rate_limit_enabled: bool = True
+    rate_limit_max_requests: int = 20
+    rate_limit_window_seconds: int = 60
+    exact_cache_enabled: bool = True
+    exact_cache_ttl_seconds: int = 300
+    request_lock_enabled: bool = True
+    request_lock_ttl_seconds: int = 30
     enable_response_cache: bool = False
     response_cache_provider: str = "redis"
     redis_url: str | None = None
@@ -155,11 +165,15 @@ class Settings:
 
     @property
     def redis_configured(self) -> bool:
-        return self.resolved_redis_url is not None
+        return self.upstash_redis_configured
+
+    @property
+    def upstash_redis_configured(self) -> bool:
+        return bool(self.upstash_redis_rest_url and self.upstash_redis_rest_token)
 
     @property
     def redis_healthcheck_enabled(self) -> bool:
-        return self.enable_response_cache or self.enable_rate_limiting
+        return self.enable_redis
 
     @property
     def migration_database_url(self) -> str:
@@ -330,8 +344,15 @@ def _validate_production_requirements(
     frontend_origin: str | None,
     database_url: str | None,
     llm_api_key: str | None,
+    enable_redis: bool,
+    upstash_redis_rest_url: str | None,
+    upstash_redis_rest_token: str | None,
 ) -> None:
     if app_env != "production":
+        if enable_redis and (upstash_redis_rest_url is None or upstash_redis_rest_token is None):
+            raise ValueError(
+                "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required when ENABLE_REDIS=true."
+            )
         return
     if frontend_origin is None:
         raise ValueError("FRONTEND_ORIGIN is required when APP_ENV=production.")
@@ -340,6 +361,10 @@ def _validate_production_requirements(
     if llm_api_key is None:
         raise ValueError(
             "LLM_API_KEY or OPENAI_API_KEY must be set when APP_ENV=production."
+        )
+    if enable_redis and (upstash_redis_rest_url is None or upstash_redis_rest_token is None):
+        raise ValueError(
+            "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required when ENABLE_REDIS=true."
         )
 
 
@@ -415,11 +440,21 @@ def get_settings() -> Settings:
     if database_url is None and app_env != "production":
         database_url = DEFAULT_LOCAL_DATABASE_URL
     frontend_origin = _get_non_empty_env("FRONTEND_ORIGIN")
+
+    enable_redis = _parse_bool(
+        os.getenv("ENABLE_REDIS"),
+        default=False,
+    )
+    upstash_redis_rest_url = _get_non_empty_env("UPSTASH_REDIS_REST_URL")
+    upstash_redis_rest_token = _get_non_empty_env("UPSTASH_REDIS_REST_TOKEN")
     _validate_production_requirements(
         app_env=app_env,
         frontend_origin=frontend_origin,
         database_url=database_url,
         llm_api_key=llm_api_key,
+        enable_redis=enable_redis,
+        upstash_redis_rest_url=upstash_redis_rest_url,
+        upstash_redis_rest_token=upstash_redis_rest_token,
     )
 
     knowledge_chunk_size = _get_int_env(
@@ -491,6 +526,38 @@ def get_settings() -> Settings:
     allow_raw_production_text_in_evals = _parse_bool(
         os.getenv("ALLOW_RAW_PRODUCTION_TEXT_IN_EVALS"),
         default=False,
+    )
+    rate_limit_enabled = _parse_bool(
+        _get_first_env("RATE_LIMIT_ENABLED", "ENABLE_RATE_LIMITING"),
+        default=True,
+    )
+    rate_limit_max_requests = _get_int_env(
+        "RATE_LIMIT_MAX_REQUESTS",
+        20,
+        minimum=1,
+    )
+    rate_limit_window_seconds = _get_int_env(
+        "RATE_LIMIT_WINDOW_SECONDS",
+        60,
+        minimum=1,
+    )
+    exact_cache_enabled = _parse_bool(
+        _get_first_env("EXACT_CACHE_ENABLED", "ENABLE_EXACT_RESPONSE_CACHE"),
+        default=True,
+    )
+    exact_cache_ttl_seconds = _get_int_env(
+        "EXACT_CACHE_TTL_SECONDS",
+        300,
+        minimum=1,
+    )
+    request_lock_enabled = _parse_bool(
+        os.getenv("REQUEST_LOCK_ENABLED"),
+        default=True,
+    )
+    request_lock_ttl_seconds = _get_int_env(
+        "REQUEST_LOCK_TTL_SECONDS",
+        30,
+        minimum=1,
     )
     enable_response_cache = _parse_bool(
         os.getenv("ENABLE_RESPONSE_CACHE"),
@@ -749,6 +816,16 @@ def get_settings() -> Settings:
         langfuse_export_default_limit=langfuse_export_default_limit,
         enable_production_feedback_export=enable_production_feedback_export,
         allow_raw_production_text_in_evals=allow_raw_production_text_in_evals,
+        enable_redis=enable_redis,
+        upstash_redis_rest_url=upstash_redis_rest_url,
+        upstash_redis_rest_token=upstash_redis_rest_token,
+        rate_limit_enabled=rate_limit_enabled,
+        rate_limit_max_requests=rate_limit_max_requests,
+        rate_limit_window_seconds=rate_limit_window_seconds,
+        exact_cache_enabled=exact_cache_enabled,
+        exact_cache_ttl_seconds=exact_cache_ttl_seconds,
+        request_lock_enabled=request_lock_enabled,
+        request_lock_ttl_seconds=request_lock_ttl_seconds,
         enable_response_cache=enable_response_cache,
         response_cache_provider=response_cache_provider,
         redis_url=redis_url,
