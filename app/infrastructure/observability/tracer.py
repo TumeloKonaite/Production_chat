@@ -19,11 +19,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 CONTENT_PREVIEW_LIMIT = 240
+LANGFUSE_PROVIDER_NAME = "langfuse"
+
+
+class ObservabilityConfigurationError(RuntimeError):
+    """Raised when enabled observability cannot be initialized."""
 
 
 @dataclass(slots=True)
 class ObservabilityTrace:
     root_observation: RootObservationHandle | None = None
+    provider: str | None = None
+    external_trace_id: str | None = None
 
     @property
     def is_active(self) -> bool:
@@ -57,7 +64,13 @@ class ObservabilityTracer(Protocol):
         top_k: int,
         embedding_provider: str,
         embedding_model: str,
-        vector_store: str | None,
+        embedding_dimension: int | None,
+        similarity_threshold: float | None,
+        vector_store_provider: str | None,
+        vector_store_name: str | None,
+        reranker_enabled: bool,
+        reranker_type: str | None,
+        reranker_model: str | None,
     ) -> ObservationHandle | None:
         ...
 
@@ -110,6 +123,7 @@ class ObservabilityTracer(Protocol):
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        estimated_cost_usd: float | None,
         metadata: dict[str, object] | None = None,
     ) -> None:
         ...
@@ -208,7 +222,11 @@ class LangfuseTracer:
             environment=self._environment,
             release=self._release,
         )
-        return ObservabilityTrace(root_observation=root_observation)
+        return ObservabilityTrace(
+            root_observation=root_observation,
+            provider=LANGFUSE_PROVIDER_NAME,
+            external_trace_id=root_observation.trace_id,
+        )
 
     def start_retrieval(
         self,
@@ -220,7 +238,13 @@ class LangfuseTracer:
         top_k: int,
         embedding_provider: str,
         embedding_model: str,
-        vector_store: str | None,
+        embedding_dimension: int | None,
+        similarity_threshold: float | None,
+        vector_store_provider: str | None,
+        vector_store_name: str | None,
+        reranker_enabled: bool,
+        reranker_type: str | None,
+        reranker_model: str | None,
     ) -> ObservationHandle | None:
         if not trace.is_active:
             return None
@@ -237,7 +261,13 @@ class LangfuseTracer:
             metadata={
                 "embedding_provider": embedding_provider,
                 "embedding_model": embedding_model,
-                "vector_store": vector_store,
+                "embedding_dimension": embedding_dimension,
+                "similarity_threshold": similarity_threshold,
+                "vector_store_provider": vector_store_provider,
+                "vector_store_name": vector_store_name,
+                "reranker_enabled": reranker_enabled,
+                "reranker_type": reranker_type,
+                "reranker_model": reranker_model,
             },
             version=self._release,
         )
@@ -259,11 +289,19 @@ class LangfuseTracer:
                     "latency_ms": latency_ms,
                     "retrieved_sources": [chunk.source for chunk in retrieved_chunks],
                     "chunk_ids": [self._chunk_id(chunk) for chunk in retrieved_chunks],
+                    "source_document_ids": [
+                        self._source_document_id(chunk) for chunk in retrieved_chunks
+                    ],
+                    "scores": [chunk.similarity for chunk in retrieved_chunks],
                     "results": [
                         {
                             "rank": index,
                             "chunk_id": self._chunk_id(chunk),
+                            "source_document_id": self._source_document_id(chunk),
                             "source_name": chunk.source,
+                            "source_type": chunk.metadata.get("source_type"),
+                            "retrieval_rank": chunk.metadata.get("retrieval_rank"),
+                            "final_rank": chunk.metadata.get("final_rank"),
                             "score": chunk.similarity,
                             "content_preview": self._truncate_text(chunk.content),
                         }
@@ -358,6 +396,7 @@ class LangfuseTracer:
         input_tokens: int | None,
         output_tokens: int | None,
         total_tokens: int | None,
+        estimated_cost_usd: float | None,
         metadata: dict[str, object] | None = None,
     ) -> None:
         if not trace.is_active or trace.root_observation is None:
@@ -374,6 +413,7 @@ class LangfuseTracer:
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
+                    "estimated_cost_usd": estimated_cost_usd,
                 }
             }
             if metadata:
@@ -418,6 +458,15 @@ class LangfuseTracer:
             return value
         return chunk.id
 
+    def _source_document_id(self, chunk: RetrievedChunk) -> str | None:
+        for key in ("source_document_id", "document_id", "knowledge_file_id"):
+            value = chunk.metadata.get(key)
+            if isinstance(value, str):
+                normalized = value.strip()
+                if normalized:
+                    return normalized
+        return None
+
     def _truncate_text(self, value: str) -> str:
         normalized = value.strip()
         if len(normalized) <= CONTENT_PREVIEW_LIMIT:
@@ -438,12 +487,10 @@ def _build_tracer(settings: Settings) -> ObservabilityTracer:
             release=settings.langfuse_release,
             sample_rate=settings.langfuse_sample_rate,
         )
-    except Exception:
-        logger.warning(
-            "Langfuse initialization failed. Continuing with no-op observability.",
-            exc_info=True,
-        )
-        return NoOpTracer()
+    except Exception as exc:
+        raise ObservabilityConfigurationError(
+            "Langfuse observability is enabled but the Langfuse client could not be initialized."
+        ) from exc
 
     return LangfuseTracer(
         client=client,

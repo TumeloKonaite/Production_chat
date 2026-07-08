@@ -5,7 +5,6 @@ import logging
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
@@ -46,7 +45,8 @@ async def readiness_check(
 ) -> dict[str, str]:
     try:
         db_session.execute(text("SELECT 1"))
-    except SQLAlchemyError:
+    except Exception:
+        logger.warning("Database readiness check failed.", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"status": "degraded", "database": "unavailable"},

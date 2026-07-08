@@ -10,6 +10,7 @@ from app.config import (
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_OPENAI_BASE_URL,
     DEFAULT_OPENROUTER_BASE_URL,
+    LANGFUSE_FEATURE_FLAG,
     SUPPORTED_APP_ENVS,
     SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_RERANKER_TYPES,
@@ -273,7 +274,7 @@ def test_get_settings_uses_configured_reranker_values(
 def test_get_settings_uses_configured_langfuse_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
     monkeypatch.setenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com/")
@@ -620,13 +621,13 @@ def test_get_settings_rejects_response_cache_distance_threshold_above_two(
 def test_get_settings_requires_langfuse_public_key_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
 
     with pytest.raises(
         ValueError,
-        match="LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE=true.",
+        match=rf"LANGFUSE_PUBLIC_KEY is required when {LANGFUSE_FEATURE_FLAG}=true.",
     ):
         get_settings()
 
@@ -634,13 +635,13 @@ def test_get_settings_requires_langfuse_public_key_when_enabled(
 def test_get_settings_requires_langfuse_secret_key_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ENABLE_LANGFUSE", "true")
+    monkeypatch.setenv("ENABLE_LANGFUSE_OBSERVABILITY", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
 
     with pytest.raises(
         ValueError,
-        match="LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE=true.",
+        match=rf"LANGFUSE_SECRET_KEY is required when {LANGFUSE_FEATURE_FLAG}=true.",
     ):
         get_settings()
 
@@ -653,6 +654,42 @@ def test_get_settings_requires_database_url_in_production(
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     with pytest.raises(ValueError, match="DATABASE_URL is required when APP_ENV=production."):
+        get_settings()
+
+
+def test_get_settings_rejects_placeholder_database_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://postgres:secret@...pooler...:6543/postgres?sslmode=require",
+    )
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+
+    with pytest.raises(
+        ValueError,
+        match="DATABASE_URL contains placeholder text. Replace example values with the real deployed URL.",
+    ):
+        get_settings()
+
+
+def test_get_settings_rejects_invalid_database_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://postgres:secret@bad..host:5432/app",
+    )
+    monkeypatch.setenv("LLM_API_KEY", "prod-key")
+
+    with pytest.raises(
+        ValueError,
+        match="DATABASE_URL contains an invalid hostname.",
+    ):
         get_settings()
 
 
@@ -681,6 +718,20 @@ def test_get_settings_requires_upstash_credentials_when_redis_is_enabled(
     with pytest.raises(
         ValueError,
         match="UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required when ENABLE_REDIS=true.",
+    ):
+        get_settings()
+
+
+def test_get_settings_rejects_placeholder_upstash_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_REDIS", "true")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://...upstash.io")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "token")
+
+    with pytest.raises(
+        ValueError,
+        match="UPSTASH_REDIS_REST_URL contains placeholder text. Replace example values with the real deployed URL.",
     ):
         get_settings()
 

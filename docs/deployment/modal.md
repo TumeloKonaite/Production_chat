@@ -55,10 +55,11 @@ LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1-mini
 LLM_API_KEY=...
 
-ENABLE_LANGFUSE=true
+ENABLE_LANGFUSE_OBSERVABILITY=true
 LANGFUSE_PUBLIC_KEY=...
 LANGFUSE_SECRET_KEY=...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_ENVIRONMENT=production
 
 ENABLE_MLFLOW_TRACKING=true
 MLFLOW_TRACKING_URI=...
@@ -196,5 +197,6 @@ Retries reuse the same trigger path. If the previous run failed, a new `pending`
 
 - Supabase SSL or pooler issues: ensure `DATABASE_URL` includes `?sslmode=require` and uses the transaction pooler host and port `6543`.
 - Migration connection issues: use the direct or session-mode URL for `DATABASE_DIRECT_URL`; do not point migrations at the runtime pooler unless Supabase explicitly documents that setup for your project.
-- Missing secrets: if startup fails on Modal, verify `production-chatbot-api-secrets` exists and includes `FRONTEND_ORIGIN`, `DATABASE_URL`, `INGESTION_BACKEND=modal`, and the active LLM key.
+- Missing secrets: if startup fails on Modal, verify `production-chatbot-api-secrets` exists and includes `FRONTEND_ORIGIN`, `DATABASE_URL`, `INGESTION_BACKEND=modal`, the active LLM key, and both Langfuse keys when `ENABLE_LANGFUSE_OBSERVABILITY=true`.
+- Langfuse behavior: when `ENABLE_LANGFUSE_OBSERVABILITY=false`, the app starts without Langfuse credentials. When it is `true`, startup fails fast if the Langfuse client cannot initialize, but runtime Langfuse API failures do not block chat responses.
 - Redis readiness failures: if `/ready` reports `redis: "unavailable"`, verify the Upstash REST URL, token, and network reachability. If it reports `redis: "misconfigured"`, `ENABLE_REDIS=true` is set without usable Upstash credentials.

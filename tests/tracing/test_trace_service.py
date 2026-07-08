@@ -37,6 +37,8 @@ def test_trace_service_records_trace_lifecycle(tmp_path) -> None:
         status=TraceStatus.STARTED,
         llm_provider="openai",
         llm_model="gpt-4.1-mini",
+        observability_provider="langfuse",
+        external_trace_id="lf-trace-123",
         prompt_version="v1_professional",
         retriever_type="vector",
         embedding_provider="hf",
@@ -69,6 +71,8 @@ def test_trace_service_records_trace_lifecycle(tmp_path) -> None:
     assert stored_trace.output_text == "Tumelo built a production-ready FastAPI chatbot."
     assert stored_trace.total_tokens == 1380
     assert float(stored_trace.estimated_cost_usd) == 0.000768
+    assert stored_trace.observability_provider == "langfuse"
+    assert stored_trace.external_trace_id == "lf-trace-123"
     assert stored_trace.steps[0].step_type == TraceStepType.REQUEST_RECEIVED
 
 

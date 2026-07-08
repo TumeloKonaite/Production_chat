@@ -47,8 +47,9 @@ def build_settings(**overrides: object) -> Settings:
         "vector_store_provider": "supabase_pgvector",
         "supabase_url": "https://project.supabase.co",
         "supabase_service_role_key": "supabase-secret",
-        "redis_url": "rediss://cache.example.com:6379/0",
-        "redis_token": "redis-secret",
+        "enable_redis": True,
+        "upstash_redis_rest_url": "https://cache.example.com",
+        "upstash_redis_rest_token": "redis-secret",
     }
     values.update(overrides)
     return Settings(**values)

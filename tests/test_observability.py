@@ -3,11 +3,18 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
+import pytest
 
 from app.config import Settings
 from app.infrastructure.observability import NoOpTracer, get_tracer
 from app.infrastructure.observability.langfuse_client import LangfuseClient
-from app.infrastructure.observability.tracer import CONTENT_PREVIEW_LIMIT, LangfuseTracer
+import app.infrastructure.observability.tracer as tracer_module
+from app.infrastructure.observability.tracer import (
+    CONTENT_PREVIEW_LIMIT,
+    LANGFUSE_PROVIDER_NAME,
+    LangfuseTracer,
+    ObservabilityConfigurationError,
+)
 from app.services.retrieval import RetrievedChunk
 
 
@@ -61,6 +68,7 @@ def build_settings(**overrides: object) -> Settings:
 class FakeObservation:
     name: str
     as_type: str
+    trace_id: str | None = None
     updates: list[dict[str, object]] = field(default_factory=list)
     ended: int = 0
     fail_on_update: bool = False
@@ -97,6 +105,7 @@ class FakeSdkClient:
         observation = FakeObservation(
             name=str(kwargs["name"]),
             as_type=str(kwargs["as_type"]),
+            trace_id="lf-trace-123",
             fail_on_update=self.fail_on_update,
         )
         context = FakeObservationContext(observation=observation)
@@ -114,6 +123,7 @@ class FakeSdkClient:
         observation = FakeObservation(
             name=str(kwargs["name"]),
             as_type=str(kwargs.get("as_type", "span")),
+            trace_id="lf-trace-123",
             fail_on_update=self.fail_on_update,
         )
         observation.updates.append(
@@ -193,7 +203,13 @@ def test_noop_tracer_methods_are_safe() -> None:
         top_k=5,
         embedding_provider="hf",
         embedding_model="all-MiniLM-L6-v2",
-        vector_store="pgvector",
+        embedding_dimension=384,
+        similarity_threshold=0.55,
+        vector_store_provider="pgvector",
+        vector_store_name="pgvector",
+        reranker_enabled=False,
+        reranker_type="none",
+        reranker_model=None,
     )
     tracer.complete_retrieval(
         trace,
@@ -229,6 +245,7 @@ def test_noop_tracer_methods_are_safe() -> None:
         input_tokens=10,
         output_tokens=5,
         total_tokens=15,
+        estimated_cost_usd=0.00042,
     )
     tracer.capture_error(trace, error_message="boom", latency_ms=30)
     tracer.flush()
@@ -256,6 +273,8 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
         llm_provider="openai",
         llm_model="gpt-4.1-mini",
     )
+    assert trace.provider == LANGFUSE_PROVIDER_NAME
+    assert trace.external_trace_id == "lf-trace-123"
     retrieval_observation = tracer.start_retrieval(
         trace,
         original_query="Tell me about the chatbot",
@@ -264,7 +283,13 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
         top_k=5,
         embedding_provider="hf",
         embedding_model="all-MiniLM-L6-v2",
-        vector_store="pgvector",
+        embedding_dimension=384,
+        similarity_threshold=0.55,
+        vector_store_provider="pgvector",
+        vector_store_name="pgvector",
+        reranker_enabled=False,
+        reranker_type="none",
+        reranker_model=None,
     )
     tracer.complete_retrieval(
         trace,
@@ -300,6 +325,7 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
         input_tokens=120,
         output_tokens=32,
         total_tokens=152,
+        estimated_cost_usd=0.000768,
     )
     tracer.flush()
 
@@ -338,6 +364,7 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
     assert root_observation.updates[-1]["output"]["final_answer"] == (
         "Tumelo built a production-ready chatbot."
     )
+    assert root_observation.updates[-1]["output"]["estimated_cost_usd"] == 0.000768
     assert sdk_client.root_contexts[0].exited is True
 
     retrieval_observation = sdk_client.child_observations[0]
@@ -346,11 +373,19 @@ def test_langfuse_tracer_records_expected_payload_shapes() -> None:
     assert retrieval_observation.updates[0]["metadata"] == {
         "embedding_provider": "hf",
         "embedding_model": "all-MiniLM-L6-v2",
-        "vector_store": "pgvector",
+        "embedding_dimension": 384,
+        "similarity_threshold": 0.55,
+        "vector_store_provider": "pgvector",
+        "vector_store_name": "pgvector",
+        "reranker_enabled": False,
+        "reranker_type": "none",
+        "reranker_model": None,
     }
     retrieval_output = retrieval_observation.updates[1]["output"]
     assert retrieval_output["retrieved_sources"] == ["projects.md"]
     assert retrieval_output["chunk_ids"] == ["chunk-1"]
+    assert retrieval_output["source_document_ids"] == [None]
+    assert retrieval_output["scores"] == [0.91]
     assert retrieval_output["results"][0]["score"] == 0.91
     assert len(retrieval_output["results"][0]["content_preview"]) == CONTENT_PREVIEW_LIMIT
 
@@ -446,3 +481,21 @@ def test_langfuse_tracer_honors_sample_rate() -> None:
 
     assert trace.is_active is False
     assert sdk_client.root_contexts == []
+
+
+def test_get_tracer_raises_clear_error_when_enabled_but_client_init_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracer_module._get_cached_tracer.cache_clear()
+
+    class FailingLangfuseClient:
+        def __init__(self, **kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(tracer_module, "LangfuseClient", FailingLangfuseClient)
+
+    with pytest.raises(
+        ObservabilityConfigurationError,
+        match="Langfuse observability is enabled but the Langfuse client could not be initialized.",
+    ):
+        get_tracer(build_settings())

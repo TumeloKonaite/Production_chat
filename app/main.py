@@ -11,6 +11,7 @@ from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tavus import router as tavus_router
 from app.config import Settings, get_settings
+from app.infrastructure.observability import get_tracer
 from app.infrastructure.llm import UnknownModelError
 from app.infrastructure.prompts import UnknownPromptVersionError
 from app.knowledge.ingestion import (
@@ -47,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI, settings: Settings):
+    if settings.enable_langfuse_observability:
+        get_tracer(settings)
     logger.info("App environment: %s", settings.app_env)
     logger.info("Vector store provider: %s", settings.vector_store_provider)
     logger.info("Langfuse enabled: %s", settings.enable_langfuse_observability)

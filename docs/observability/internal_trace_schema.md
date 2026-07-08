@@ -23,9 +23,10 @@ Important columns:
 - `input_text`, `output_text`: request and final answer text
 - `status`, `error_message`: final request outcome
 - `llm_provider`, `llm_model`, `prompt_version`: model execution metadata
+- `observability_provider`, `external_trace_id`: optional vendor trace correlation fields
 - `retriever_type`, `embedding_provider`, `embedding_model`: retrieval and embedding metadata
 - `input_tokens`, `output_tokens`, `total_tokens`, `estimated_cost_usd`, `latency_ms`: performance and cost data
-- `metadata`: flexible JSON for route, channel, and additional safe request context
+- `metadata`: flexible JSON for route, channel, Langfuse back-references, and additional safe request context
 
 Indexed columns:
 

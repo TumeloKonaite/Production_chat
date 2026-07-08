@@ -205,6 +205,7 @@ class ChatService:
         )
         conversation.model = selected_model_config.config_id
         request_started_at = perf_counter()
+        response_cache_context = self._build_response_cache_context()
         trace_id = self._start_trace(
             conversation_id=conversation.id,
             message=normalized_message,
@@ -218,8 +219,10 @@ class ChatService:
             message=normalized_message,
             channel=channel,
             message_metadata=message_metadata,
+            prompt_version=selected_prompt_version,
             model_config_id=selected_model_config.config_id,
-            response_cache_context=self._build_response_cache_context(),
+            internal_trace_id=trace_id,
+            response_cache_context=response_cache_context,
         )
         self._record_trace_step(
             trace_id=trace_id,
@@ -229,10 +232,16 @@ class ChatService:
                 "message": normalized_message,
                 "channel": channel,
             },
-            metadata=self._build_trace_metadata(channel, message_metadata),
+            metadata=self._build_trace_metadata(
+                conversation_id=conversation.id,
+                channel=channel,
+                message_metadata=message_metadata,
+                prompt_version=selected_prompt_version,
+                model_config_id=selected_model_config.config_id,
+                internal_trace_id=trace_id,
+                observability_trace=observability_trace,
+            ),
         )
-
-        response_cache_context = self._build_response_cache_context()
         try:
             # Persist the user turn before calling the LLM so failed generations still leave a trace.
             user_message = self.repository.add_message(
@@ -469,11 +478,18 @@ class ChatService:
                 channel=channel,
                 message_metadata=message_metadata,
                 trace_id=trace_id,
+                observability_trace=observability_trace,
                 response_cache_context=response_cache_context,
             )
         except ConversationRepositoryError as exc:
             self._fail_trace(
                 trace_id=trace_id,
+                conversation_id=conversation.id,
+                channel=channel,
+                message_metadata=message_metadata,
+                prompt_version=selected_prompt_version,
+                model_config_id=selected_model_config.config_id,
+                observability_trace=observability_trace,
                 exc=exc,
                 started_at=request_started_at,
                 metadata={
@@ -490,6 +506,12 @@ class ChatService:
         except Exception as exc:
             self._fail_trace(
                 trace_id=trace_id,
+                conversation_id=conversation.id,
+                channel=channel,
+                message_metadata=message_metadata,
+                prompt_version=selected_prompt_version,
+                model_config_id=selected_model_config.config_id,
+                observability_trace=observability_trace,
                 exc=exc,
                 started_at=request_started_at,
                 metadata={
@@ -523,9 +545,11 @@ class ChatService:
             output_text=llm_response.message,
             llm_response=llm_response,
             latency_ms=total_latency_ms,
+            conversation_id=conversation.id,
             channel=channel,
             message_metadata=message_metadata,
             assistant_message_id=assistant_message.id,
+            observability_trace=observability_trace,
             response_cache_context=response_cache_context,
         )
         self._complete_observability_trace(
@@ -533,6 +557,7 @@ class ChatService:
             llm_response=llm_response,
             latency_ms=total_latency_ms,
             conversation_id=conversation.id,
+            assistant_message_id=assistant_message.id,
             response_cache_context=response_cache_context,
         )
         self._log_response_cache_context(response_cache_context)
@@ -683,6 +708,9 @@ class ChatService:
                 "query": message,
                 "top_k": self.retrieval_top_k,
                 "retriever_type": self.settings.retriever_type,
+                "similarity_threshold": self.settings.retrieval_min_similarity,
+                "reranker_enabled": self.retrieval_service.reranker_enabled,
+                "reranker_type": self.retrieval_service.reranker_type,
             },
             started_at=started_at,
         )
@@ -703,8 +731,16 @@ class ChatService:
                 "retrieved_chunks": [
                     {
                         "chunk_id": item.metadata.get("chunk_id", item.id),
+                        "source_document_id": (
+                            item.metadata.get("source_document_id")
+                            or item.metadata.get("document_id")
+                            or item.metadata.get("knowledge_file_id")
+                        ),
                         "source": item.source,
+                        "source_type": item.metadata.get("source_type"),
                         "section": item.section,
+                        "retrieval_rank": item.metadata.get("retrieval_rank"),
+                        "final_rank": item.metadata.get("final_rank"),
                         "score": item.similarity,
                     }
                     for item in retrieved_chunks
@@ -804,11 +840,24 @@ class ChatService:
         channel: str,
         message_metadata: dict[str, object],
         trace_id: str | None,
+        observability_trace: ObservabilityTrace,
         response_cache_context: ResponseCacheContext,
     ):
         assistant_message_metadata = dict(message_metadata)
         if trace_id is not None:
             assistant_message_metadata["trace_id"] = trace_id
+        if observability_trace.provider is not None:
+            assistant_message_metadata["observability_provider"] = (
+                observability_trace.provider
+            )
+        if observability_trace.external_trace_id is not None:
+            assistant_message_metadata["external_trace_id"] = (
+                observability_trace.external_trace_id
+            )
+            if observability_trace.provider == "langfuse":
+                assistant_message_metadata["langfuse_trace_id"] = (
+                    observability_trace.external_trace_id
+                )
         if response_cache_context.enabled:
             assistant_message_metadata["response_cache"] = self._response_cache_message_metadata(
                 response_cache_context
@@ -880,10 +929,17 @@ class ChatService:
                 retriever_type=self.settings.retriever_type,
                 embedding_provider=self.settings.embedding_provider,
                 embedding_model=self.settings.knowledge_embedding_model,
-                metadata=self._build_trace_metadata(channel, message_metadata),
+                metadata=self._build_trace_metadata(
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    message_metadata=message_metadata,
+                    prompt_version=prompt_version,
+                    model_config_id=model_config_id,
+                    internal_trace_id=None,
+                ),
             )
         except TraceServiceError:
-            logger.warning("Trace start failed.", exc_info=True)
+            logger.warning("Trace start failed.")
             return None
 
         return trace.id
@@ -921,7 +977,7 @@ class ChatService:
                 completed_at=completed_at,
             )
         except TraceServiceError:
-            logger.warning("Trace step write failed.", exc_info=True)
+            logger.warning("Trace step write failed.")
 
     def _complete_trace(
         self,
@@ -930,16 +986,26 @@ class ChatService:
         output_text: str,
         llm_response: LLMGeneratedResponse,
         latency_ms: int,
+        conversation_id: str,
         channel: str,
         message_metadata: dict[str, object],
         assistant_message_id: str,
+        observability_trace: ObservabilityTrace,
         response_cache_context: ResponseCacheContext,
     ) -> None:
         if self.trace_service is None or trace_id is None:
             return
 
         try:
-            trace_metadata = self._build_trace_metadata(channel, message_metadata)
+            trace_metadata = self._build_trace_metadata(
+                conversation_id=conversation_id,
+                channel=channel,
+                message_metadata=message_metadata,
+                prompt_version=llm_response.prompt_version,
+                model_config_id=llm_response.model_config_id,
+                internal_trace_id=trace_id,
+                observability_trace=observability_trace,
+            )
             trace_metadata["assistant_message_id"] = assistant_message_id
             trace_metadata["response_cache"] = self._response_cache_metadata(response_cache_context)
             self.trace_service.complete_trace(
@@ -948,6 +1014,8 @@ class ChatService:
                 status=TraceStatus.SUCCESS,
                 llm_provider=llm_response.model_provider,
                 llm_model=llm_response.model_name,
+                observability_provider=observability_trace.provider,
+                external_trace_id=observability_trace.external_trace_id,
                 prompt_version=llm_response.prompt_version,
                 retriever_type=self.settings.retriever_type,
                 embedding_provider=self.settings.embedding_provider,
@@ -960,23 +1028,40 @@ class ChatService:
                 metadata=trace_metadata,
             )
         except TraceServiceError:
-            logger.warning("Trace completion failed.", exc_info=True)
+            logger.warning("Trace completion failed.")
 
     def _fail_trace(
         self,
         *,
         trace_id: str | None,
+        conversation_id: str,
+        channel: str,
+        message_metadata: dict[str, object],
+        prompt_version: str,
+        model_config_id: str,
+        observability_trace: ObservabilityTrace,
         exc: Exception,
         started_at: float,
         metadata: dict[str, object] | None = None,
     ) -> None:
         safe_error_message = self._safe_trace_error_message(exc)
+        trace_metadata = self._build_trace_metadata(
+            conversation_id=conversation_id,
+            channel=channel,
+            message_metadata=message_metadata,
+            prompt_version=prompt_version,
+            model_config_id=model_config_id,
+            internal_trace_id=trace_id,
+            observability_trace=observability_trace,
+        )
+        if metadata:
+            trace_metadata.update(metadata)
         self._record_trace_step(
             trace_id=trace_id,
             step_type=TraceStepType.ERROR,
             status=TraceStatus.ERROR,
             name="Request failed",
-            metadata=metadata,
+            metadata=trace_metadata,
             latency_ms=self._elapsed_ms(started_at),
             error_message=safe_error_message,
             completed_at=self._utcnow(),
@@ -989,21 +1074,56 @@ class ChatService:
                 trace_id,
                 error_message=safe_error_message,
                 latency_ms=self._elapsed_ms(started_at),
-                metadata=metadata,
+                observability_provider=observability_trace.provider,
+                external_trace_id=observability_trace.external_trace_id,
+                metadata=trace_metadata,
             )
         except TraceServiceError:
-            logger.warning("Trace failure write failed.", exc_info=True)
+            logger.warning("Trace failure write failed.")
 
     def _build_trace_metadata(
         self,
+        *,
+        conversation_id: str,
         channel: str,
         message_metadata: dict[str, object],
+        prompt_version: str | None,
+        model_config_id: str | None,
+        internal_trace_id: str | None,
+        observability_trace: ObservabilityTrace | None = None,
     ) -> dict[str, object]:
         metadata = {
+            "app_environment": self.settings.app_env,
             "channel": channel,
             "route": self._get_endpoint(channel),
+            "endpoint_name": self._get_endpoint_name(channel),
+            "conversation_id": conversation_id,
+            "prompt_version": prompt_version,
+            "model_config_id": model_config_id,
+            "llm_provider": self._extract_model_provider(model_config_id),
+            "llm_model": self._extract_model_name(model_config_id) if model_config_id is not None else None,
+            "retriever_type": self.settings.retriever_type,
+            "vector_store_provider": self.settings.vector_store_provider,
+            "vector_store_name": self._get_vector_store_name(),
+            "embedding_provider": self.settings.embedding_provider,
+            "embedding_model": self.settings.knowledge_embedding_model,
+            "embedding_dimension": self.settings.embedding_dimension,
+            "top_k": self.retrieval_top_k,
+            "similarity_threshold": self.settings.retrieval_min_similarity,
+            "query_rewriting_enabled": self.settings.enable_query_rewriting,
+            "reranker_enabled": self.retrieval_service.reranker_enabled,
+            "reranker_type": self.retrieval_service.reranker_type,
+            "reranker_model": self._get_reranker_model(),
         }
-        metadata.update(message_metadata)
+        metadata.update(self._sanitize_metadata_mapping(message_metadata))
+        metadata["internal_trace_id"] = internal_trace_id
+        if observability_trace is not None:
+            if observability_trace.provider is not None:
+                metadata["observability_provider"] = observability_trace.provider
+            if observability_trace.external_trace_id is not None:
+                metadata["external_trace_id"] = observability_trace.external_trace_id
+                if observability_trace.provider == "langfuse":
+                    metadata["langfuse_trace_id"] = observability_trace.external_trace_id
         return metadata
 
     def _safe_trace_error_message(self, exc: Exception) -> str:
@@ -1026,18 +1146,86 @@ class ChatService:
         normalized = value.strip()
         return normalized or None
 
-    def _extract_model_provider(self, model_config_id: str) -> str | None:
+    def _extract_model_provider(self, model_config_id: str | None) -> str | None:
+        if model_config_id is None:
+            return None
         if ":" not in model_config_id:
             return None
         provider, _model = model_config_id.split(":", 1)
         normalized_provider = provider.strip()
         return normalized_provider or None
 
-    def _extract_model_name(self, model_config_id: str) -> str:
+    def _extract_model_name(self, model_config_id: str | None) -> str | None:
+        if model_config_id is None:
+            return None
         if ":" not in model_config_id:
             return model_config_id
         _provider, model = model_config_id.split(":", 1)
         return model.strip() or model_config_id
+
+    def _get_reranker_model(self) -> str | None:
+        value = getattr(self.settings, "reranker_model", None)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _sanitize_metadata_mapping(
+        self,
+        metadata: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            str(key): self._sanitize_metadata_value(value)
+            for key, value in metadata.items()
+            if value is not None
+        }
+
+    def _sanitize_metadata_value(self, value: object) -> object:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, datetime):
+            normalized = value
+            if normalized.tzinfo is None:
+                normalized = normalized.replace(tzinfo=UTC)
+            return normalized.isoformat()
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        if isinstance(value, list):
+            return [self._sanitize_metadata_value(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._sanitize_metadata_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): self._sanitize_metadata_value(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        return str(value)
+
+    def _log_observability_failure(self, stage: str, exc: Exception) -> None:
+        logger.warning(
+            "Observability %s failed: %s (%s)",
+            stage,
+            exc.__class__.__name__,
+            self._safe_observability_error_message(exc),
+        )
+
+    def _safe_observability_error_message(self, exc: Exception) -> str:
+        raw_message = str(exc).strip()
+        if not raw_message:
+            return "no-details"
+
+        redacted = raw_message
+        for secret in (
+            self.settings.langfuse_public_key,
+            self.settings.langfuse_secret_key,
+            self.settings.openai_api_key,
+            self.settings.openrouter_api_key,
+            self.settings.llm_api_key,
+        ):
+            if secret:
+                redacted = redacted.replace(secret, "[redacted]")
+        return redacted
 
     def _truncate_text(self, value: str) -> str:
         if len(value) <= TRACE_PROMPT_PREVIEW_LIMIT:
@@ -1057,7 +1245,9 @@ class ChatService:
         message: str,
         channel: str,
         message_metadata: dict[str, object],
+        prompt_version: str,
         model_config_id: str,
+        internal_trace_id: str | None,
         response_cache_context: ResponseCacheContext,
     ) -> ObservabilityTrace:
         try:
@@ -1074,10 +1264,22 @@ class ChatService:
                 channel=channel,
                 llm_provider=self._extract_model_provider(model_config_id),
                 llm_model=self._extract_model_name(model_config_id),
-                metadata=self._response_cache_config_metadata(response_cache_context),
+                metadata=self._sanitize_metadata_mapping(
+                    {
+                        **self._build_trace_metadata(
+                            conversation_id=conversation_id,
+                            channel=channel,
+                            message_metadata=message_metadata,
+                            prompt_version=prompt_version,
+                            model_config_id=model_config_id,
+                            internal_trace_id=internal_trace_id,
+                        ),
+                        **self._response_cache_config_metadata(response_cache_context),
+                    }
+                ),
             )
-        except Exception:
-            logger.warning("Observability trace start failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("trace start", exc)
             return ObservabilityTrace()
 
     def _start_observability_retrieval(
@@ -1095,10 +1297,16 @@ class ChatService:
                 top_k=self.retrieval_top_k,
                 embedding_provider=self.settings.embedding_provider,
                 embedding_model=self.settings.knowledge_embedding_model,
-                vector_store=self._get_vector_store_name(),
+                embedding_dimension=self.settings.embedding_dimension,
+                similarity_threshold=self.settings.retrieval_min_similarity,
+                vector_store_provider=self.settings.vector_store_provider,
+                vector_store_name=self._get_vector_store_name(),
+                reranker_enabled=self.retrieval_service.reranker_enabled,
+                reranker_type=self.retrieval_service.reranker_type,
+                reranker_model=self._get_reranker_model(),
             )
-        except Exception:
-            logger.warning("Observability retrieval trace start failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("retrieval trace start", exc)
             return None
 
     def _complete_observability_retrieval(
@@ -1116,8 +1324,8 @@ class ChatService:
                 retrieved_chunks=retrieved_chunks,
                 latency_ms=latency_ms,
             )
-        except Exception:
-            logger.warning("Observability retrieval trace completion failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("retrieval trace completion", exc)
 
     def _start_observability_llm_call(
         self,
@@ -1134,8 +1342,8 @@ class ChatService:
                 temperature=None,
                 max_tokens=None,
             )
-        except Exception:
-            logger.warning("Observability LLM trace start failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("LLM trace start", exc)
             return None
 
     def _complete_observability_llm_call(
@@ -1165,8 +1373,8 @@ class ChatService:
                 estimated_cost_usd=estimated_cost_usd,
                 error_message=error_message,
             )
-        except Exception:
-            logger.warning("Observability LLM trace completion failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("LLM trace completion", exc)
 
     def _complete_observability_trace(
         self,
@@ -1175,6 +1383,7 @@ class ChatService:
         llm_response: LLMGeneratedResponse,
         latency_ms: int,
         conversation_id: str,
+        assistant_message_id: str,
         response_cache_context: ResponseCacheContext,
     ) -> None:
         try:
@@ -1188,10 +1397,18 @@ class ChatService:
                 input_tokens=llm_response.token_usage.input_tokens,
                 output_tokens=llm_response.token_usage.output_tokens,
                 total_tokens=llm_response.token_usage.total_tokens,
-                metadata=self._response_cache_metadata(response_cache_context),
+                estimated_cost_usd=llm_response.estimated_cost_usd,
+                metadata=self._sanitize_metadata_mapping(
+                    {
+                        "assistant_message_id": assistant_message_id,
+                        "final_response_metadata": {
+                            "response_cache": self._response_cache_metadata(response_cache_context),
+                        },
+                    }
+                ),
             )
-        except Exception:
-            logger.warning("Observability trace completion failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("trace completion", exc)
 
     def _fail_observability_trace(
         self,
@@ -1206,16 +1423,16 @@ class ChatService:
                 error_message=self._safe_trace_error_message(exc),
                 latency_ms=self._elapsed_ms(started_at),
             )
-        except Exception:
-            logger.warning("Observability trace failure capture failed.", exc_info=True)
+        except Exception as captured_exc:
+            self._log_observability_failure("trace failure capture", captured_exc)
         finally:
             self._flush_observability_tracer()
 
     def _flush_observability_tracer(self) -> None:
         try:
             self.observability_tracer.flush()
-        except Exception:
-            logger.warning("Observability tracer flush failed.", exc_info=True)
+        except Exception as exc:
+            self._log_observability_failure("tracer flush", exc)
 
     def _get_vector_store_name(self) -> str | None:
         value = getattr(self.retrieval_service, "vector_store_name", None)
