@@ -60,18 +60,10 @@ class KnowledgeIngestionDocumentResponse(BaseModel):
 
 
 class KnowledgeIngestionResponse(BaseModel):
-    status: Literal["ok", "ingested"]
+    job_id: UUID
+    status: Literal["queued", "skipped"]
     source_type: Literal["local_directory", "uploaded_file"]
     file_id: UUID | None = None
-    experiment_name: str | None = None
-    embedding_provider: str
-    embedding_model: str
-    embedding_dimension: int
-    documents_loaded: int
-    chunks_created: int
-    chunks_updated: int = 0
-    chunks_skipped: int = 0
-    results: list[KnowledgeIngestionDocumentResponse]
 
 
 class KnowledgeFileUploadResponse(BaseModel):

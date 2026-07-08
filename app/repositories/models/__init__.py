@@ -4,6 +4,7 @@ from app.repositories.models.common import utcnow
 from app.repositories.models.conversation import Conversation
 from app.repositories.models.knowledge_chunk import KnowledgeChunk
 from app.repositories.models.knowledge_file import KnowledgeFile
+from app.repositories.models.knowledge_ingestion_job import KnowledgeIngestionJob
 from app.repositories.models.message import Message
 from app.repositories.models.message_feedback import MessageFeedback
 from app.repositories.models.rag_eval_result import RagEvalResult
@@ -18,6 +19,7 @@ __all__ = [
     "Conversation",
     "KnowledgeChunk",
     "KnowledgeFile",
+    "KnowledgeIngestionJob",
     "Message",
     "MessageFeedback",
     "RagEvalResult",

@@ -27,6 +27,7 @@ SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
 SUPPORTED_STORAGE_PROVIDERS = frozenset({"local", "minio", "supabase"})
 SUPPORTED_VECTOR_STORE_PROVIDERS = frozenset({"pgvector", "supabase_pgvector"})
+SUPPORTED_INGESTION_BACKENDS = frozenset({"local", "modal"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,9 @@ class Settings:
     dagshub_repo_owner: str | None
     dagshub_repo_name: str | None
     dagshub_token: str | None
+    ingestion_backend: str = "local"
+    modal_ingestion_app_name: str = "production-chatbot-api"
+    modal_ingestion_function_name: str = "run_ingestion_job"
     app_env: str = DEFAULT_APP_ENV
     frontend_origin: str | None = None
     database_direct_url: str | None = None
@@ -573,6 +577,19 @@ def get_settings() -> Settings:
         tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         eval_admin_token=_get_non_empty_env("EVAL_ADMIN_TOKEN"),
+        ingestion_backend=_get_choice_env(
+            "INGESTION_BACKEND",
+            "local",
+            supported_values=SUPPORTED_INGESTION_BACKENDS,
+        ),
+        modal_ingestion_app_name=(
+            _get_non_empty_env("MODAL_INGESTION_APP_NAME", default="production-chatbot-api")
+            or "production-chatbot-api"
+        ),
+        modal_ingestion_function_name=(
+            _get_non_empty_env("MODAL_INGESTION_FUNCTION_NAME", default="run_ingestion_job")
+            or "run_ingestion_job"
+        ),
         default_model_config_id=default_model_config_id,
         model_configs_json=_get_non_empty_env("MODEL_CONFIGS_JSON"),
         embedding_provider=(

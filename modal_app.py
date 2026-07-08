@@ -42,8 +42,9 @@ def _runtime_dependencies() -> list[str]:
 
     base_dependencies = list(project_config.get("dependencies", []))
     optional_dependencies = project_config.get("optional-dependencies", {})
+    deploy_dependencies = list(optional_dependencies.get("deploy", []))
     response_cache_dependencies = list(optional_dependencies.get("response-cache", []))
-    return base_dependencies + response_cache_dependencies
+    return base_dependencies + deploy_dependencies + response_cache_dependencies
 
 
 modal_image = (
@@ -74,3 +75,35 @@ def fastapi_app():
     from app.main import app as api_app
 
     return api_app
+
+
+@app.function(
+    image=modal_image,
+    secrets=[modal.Secret.from_name(SECRET_NAME)],
+    timeout=150,
+)
+def run_ingestion_job(job_id: str) -> dict[str, object]:
+    import sys
+
+    if REMOTE_ROOT not in sys.path:
+        sys.path.insert(0, REMOTE_ROOT)
+
+    from app.api.dependencies.knowledge_dependencies import build_knowledge_ingestion_job_worker
+    from app.config import get_settings
+    from app.repositories.db.session import get_session_factory
+
+    settings = get_settings()
+    worker = build_knowledge_ingestion_job_worker(settings)
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        result = worker.run_job(session, job_id=job_id)
+
+    return {
+        "job_id": result.job_id,
+        "source_id": result.source_id,
+        "status": result.status,
+        "chunk_count": result.chunk_count,
+        "embedding_provider": result.embedding_provider,
+        "embedding_model": result.embedding_model,
+        "embedding_dimension": result.embedding_dimension,
+    }
