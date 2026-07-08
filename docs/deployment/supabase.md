@@ -39,6 +39,35 @@ In the Supabase dashboard:
 Keep both values secret and inject them through your deployment environment instead of committing them.
 Do not hand-build the hostnames if you can avoid it. Copy the exact strings from Supabase and then change only the SQLAlchemy driver prefix to `postgresql+psycopg://` when needed.
 
+## Supabase Storage setup
+
+Use Supabase Storage for uploaded knowledge files only when you set:
+
+```env
+STORAGE_PROVIDER=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_STORAGE_BUCKET=knowledge-files
+```
+
+This is separate from:
+
+```env
+VECTOR_STORE_PROVIDER=supabase_pgvector
+```
+
+`VECTOR_STORE_PROVIDER` controls chunk and embedding persistence. `STORAGE_PROVIDER` controls the original uploaded file bytes used by the upload and ingestion flows.
+
+Recommended bucket setup:
+
+1. Open your Supabase project.
+2. Go to `Storage`.
+3. Create a bucket named `knowledge-files`.
+4. Keep the bucket private.
+5. Inject the service role key into the backend environment only.
+
+This integration is server-side only. Do not expose the service role key to the frontend.
+
 ## SSL
 
 Supabase production connections require SSL. Keep `?sslmode=require` on both production URLs. Do not disable SSL for production connections.

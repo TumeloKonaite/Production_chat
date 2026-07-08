@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session as SASession
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.knowledge.schemas import KnowledgeIngestionRequest
-from app.infrastructure.storage import StorageError
+from app.infrastructure.storage import StorageError, SupabaseKnowledgeFileStorage
 from app.knowledge.ingestion import (
     KnowledgeIngestionConflictError,
     KnowledgeIngestionServiceError,
@@ -91,14 +92,16 @@ def create_uploaded_knowledge_file(
     filename: str,
     storage_path: str | None = None,
     status: str = "uploaded",
+    storage_provider: str = "local",
+    storage_bucket: str = "knowledge-files",
 ) -> KnowledgeFile:
     knowledge_file = KnowledgeFile(
         id=str(uuid4()),
         original_filename=filename,
         content_type="text/markdown" if filename.endswith(".md") else "text/plain",
         file_size_bytes=128,
-        storage_provider="local",
-        storage_bucket="knowledge-files",
+        storage_provider=storage_provider,
+        storage_bucket=storage_bucket,
         storage_path=storage_path or f"uploads/{uuid4()}/{filename}",
         checksum="checksum",
         status=status,
@@ -284,7 +287,8 @@ def test_knowledge_ingestion_service_ingests_uploaded_markdown_file(tmp_path) ->
             uploaded_file_loader=UploadedKnowledgeFileLoader(
                 storage=MappingStorage(
                     {"uploaded/company-profile.md": b"# Company\n\nGrounded answers.\n"}
-                )
+                ),
+                storage_provider="local",
             ),
         )
 
@@ -333,7 +337,8 @@ def test_knowledge_ingestion_service_ingests_uploaded_text_file(tmp_path) -> Non
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
             uploaded_file_loader=UploadedKnowledgeFileLoader(
-                storage=MappingStorage({"uploaded/notes.txt": b"Operational notes"})
+                storage=MappingStorage({"uploaded/notes.txt": b"Operational notes"}),
+                storage_provider="local",
             ),
         )
 
@@ -366,7 +371,10 @@ def test_knowledge_ingestion_service_rejects_already_ingesting_uploaded_file(tmp
         )
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
-            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({}),
+                storage_provider="local",
+            ),
         )
 
         with pytest.raises(
@@ -394,7 +402,10 @@ def test_knowledge_ingestion_service_rejects_already_ingested_uploaded_file(tmp_
         )
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
-            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({}),
+                storage_provider="local",
+            ),
         )
 
         with pytest.raises(
@@ -422,7 +433,10 @@ def test_knowledge_ingestion_service_marks_missing_storage_object_as_failed(tmp_
         )
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
-            uploaded_file_loader=UploadedKnowledgeFileLoader(storage=MappingStorage({})),
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({}),
+                storage_provider="local",
+            ),
         )
 
         with pytest.raises(KnowledgeIngestionServiceError, match="Storage object not found."):
@@ -455,7 +469,8 @@ def test_knowledge_ingestion_service_marks_decode_failure_as_failed(tmp_path) ->
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
             uploaded_file_loader=UploadedKnowledgeFileLoader(
-                storage=MappingStorage({"uploaded/invalid.md": b"\xff\xfe\x00"})
+                storage=MappingStorage({"uploaded/invalid.md": b"\xff\xfe\x00"}),
+                storage_provider="local",
             ),
         )
 
@@ -473,3 +488,97 @@ def test_knowledge_ingestion_service_marks_decode_failure_as_failed(tmp_path) ->
     assert refreshed_file is not None
     assert refreshed_file.status == "failed"
     assert refreshed_file.error_message == "Uploaded knowledge files must be valid UTF-8 text."
+
+
+def test_knowledge_ingestion_service_downloads_uploaded_file_from_supabase_storage(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/storage/v1/object/knowledge-files/uploaded/company-profile.md"
+        return httpx.Response(200, content=b"# Company\n\nGrounded answers.\n")
+
+    storage = SupabaseKnowledgeFileStorage(
+        url="https://project.supabase.co",
+        service_role_key="service-role",
+        bucket="knowledge-files",
+        http_client=httpx.Client(
+            base_url="https://project.supabase.co/storage/v1",
+            headers={
+                "apiKey": "service-role",
+                "Authorization": "Bearer service-role",
+            },
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            storage_path="uploaded/company-profile.md",
+            storage_provider="supabase",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=storage,
+                storage_provider="supabase",
+            ),
+        )
+
+        result = ingestion_service.run(
+            session,
+            request=KnowledgeIngestionRequest(
+                source_type="uploaded_file",
+                file_id=UUID(knowledge_file.id),
+            ),
+        )
+        repository = KnowledgeRepository(session)
+        stored_chunks = list(repository.list_all())
+
+    assert result.status == "ingested"
+    assert len(stored_chunks) == 1
+    assert stored_chunks[0].chunk_metadata["storage_provider"] == "supabase"
+    assert stored_chunks[0].chunk_metadata["storage_bucket"] == "knowledge-files"
+
+
+def test_knowledge_ingestion_service_rejects_storage_provider_mismatch(tmp_path) -> None:
+    session_factory = build_session_factory(tmp_path)
+    retrieval_service = FakeRetrievalService()
+
+    with session_factory() as session:
+        knowledge_file = create_uploaded_knowledge_file(
+            session,
+            filename="company-profile.md",
+            storage_provider="supabase",
+        )
+        ingestion_service = KnowledgeIngestionService(
+            retrieval_service=retrieval_service,
+            uploaded_file_loader=UploadedKnowledgeFileLoader(
+                storage=MappingStorage({}),
+                storage_provider="minio",
+            ),
+        )
+
+        with pytest.raises(
+            KnowledgeIngestionServiceError,
+            match="storage_provider=supabase, but current STORAGE_PROVIDER=minio",
+        ):
+            ingestion_service.run(
+                session,
+                request=KnowledgeIngestionRequest(
+                    source_type="uploaded_file",
+                    file_id=UUID(knowledge_file.id),
+                ),
+            )
+
+        refreshed_file = session.get(KnowledgeFile, knowledge_file.id)
+
+    assert refreshed_file is not None
+    assert refreshed_file.status == "failed"
+    assert (
+        refreshed_file.error_message
+        == "File was uploaded with storage_provider=supabase, but current STORAGE_PROVIDER=minio."
+    )
