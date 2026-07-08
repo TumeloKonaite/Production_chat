@@ -154,6 +154,10 @@ class Settings:
         return self.resolved_redis_url is not None
 
     @property
+    def redis_healthcheck_enabled(self) -> bool:
+        return self.enable_response_cache or self.enable_rate_limiting
+
+    @property
     def migration_database_url(self) -> str:
         return self.database_direct_url or self.database_url
 
@@ -319,11 +323,14 @@ def _inject_redis_token(redis_url: str, redis_token: str | None) -> str:
 def _validate_production_requirements(
     *,
     app_env: str,
+    frontend_origin: str | None,
     database_url: str | None,
     llm_api_key: str | None,
 ) -> None:
     if app_env != "production":
         return
+    if frontend_origin is None:
+        raise ValueError("FRONTEND_ORIGIN is required when APP_ENV=production.")
     if database_url is None:
         raise ValueError("DATABASE_URL is required when APP_ENV=production.")
     if llm_api_key is None:
@@ -403,8 +410,10 @@ def get_settings() -> Settings:
     database_url = _get_non_empty_env("DATABASE_URL")
     if database_url is None and app_env != "production":
         database_url = DEFAULT_LOCAL_DATABASE_URL
+    frontend_origin = _get_non_empty_env("FRONTEND_ORIGIN")
     _validate_production_requirements(
         app_env=app_env,
+        frontend_origin=frontend_origin,
         database_url=database_url,
         llm_api_key=llm_api_key,
     )
@@ -549,7 +558,7 @@ def get_settings() -> Settings:
 
     return Settings(
         app_env=app_env,
-        frontend_origin=_get_non_empty_env("FRONTEND_ORIGIN"),
+        frontend_origin=frontend_origin,
         database_url=database_url or DEFAULT_LOCAL_DATABASE_URL,
         database_direct_url=_get_non_empty_env("DATABASE_DIRECT_URL"),
         openai_api_key=openai_api_key,

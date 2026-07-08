@@ -1,16 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
 
 from app.api.chat import router as chat_router
-from app.api.dependencies.common_dependencies import get_db_session
 from app.api.evals import router as evals_router
+from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
 from app.api.tavus import router as tavus_router
 from app.config import Settings, get_settings
@@ -72,27 +69,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
+    app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(evals_router)
     app.include_router(knowledge_router)
     app.include_router(tavus_router)
-
-    @app.get("/health", tags=["health"])
-    async def healthcheck() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/ready", tags=["health"])
-    async def readiness_check(
-        db_session: Session = Depends(get_db_session),
-    ) -> dict[str, str]:
-        try:
-            db_session.execute(text("SELECT 1"))
-        except SQLAlchemyError:
-            return JSONResponse(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content={"status": "degraded", "database": "unavailable"},
-            )
-        return {"status": "ok", "database": "ok"}
 
     @app.exception_handler(InvalidChatMessageError)
     async def handle_invalid_message(

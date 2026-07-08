@@ -170,6 +170,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.redis_token is None
     assert settings.resolved_redis_url == "redis://localhost:6379/0"
+    assert settings.redis_healthcheck_enabled is False
     assert settings.enable_exact_response_cache is True
     assert settings.enable_semantic_response_cache is False
     assert settings.response_cache_ttl_seconds == 604800
@@ -309,6 +310,7 @@ def test_get_settings_uses_configured_response_cache_values(
     assert settings.redis_url == "redis://cache.internal:6379/2"
     assert settings.redis_token == "upstash-token"
     assert settings.resolved_redis_url == "redis://default:upstash-token@cache.internal:6379/2"
+    assert settings.redis_healthcheck_enabled is True
     assert settings.enable_exact_response_cache is False
     assert settings.enable_semantic_response_cache is True
     assert settings.response_cache_ttl_seconds == 3600
@@ -334,6 +336,7 @@ def test_get_settings_uses_configured_rate_limiting_values(
     settings = get_settings()
 
     assert settings.enable_rate_limiting is True
+    assert settings.redis_healthcheck_enabled is True
     assert settings.rate_limiting_fail_open is False
     assert settings.chat_rate_limit_requests_per_10_minutes == 12
     assert settings.chat_rate_limit_requests_per_day == 45
@@ -422,7 +425,7 @@ def test_get_settings_uses_supabase_storage_provider_values(
     assert settings.supabase_storage_bucket == "knowledge-files-prod"
 
 
-def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
+def test_get_settings_requires_frontend_origin_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
@@ -430,10 +433,11 @@ def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
     monkeypatch.setenv("LLM_API_KEY", "prod-key")
     monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
 
-    settings = get_settings()
-
-    assert settings.frontend_origin is None
-    assert settings.frontend_origins == []
+    with pytest.raises(
+        ValueError,
+        match="FRONTEND_ORIGIN is required when APP_ENV=production.",
+    ):
+        get_settings()
 
 
 def test_get_settings_uses_runtime_database_url_for_migrations_when_direct_url_is_unset(
@@ -675,6 +679,7 @@ def test_get_settings_requires_supabase_credentials_for_supabase_pgvector(
 def test_get_settings_requires_supabase_credentials_for_supabase_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VECTOR_STORE_PROVIDER", "pgvector")
     monkeypatch.setenv("STORAGE_PROVIDER", "supabase")
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
