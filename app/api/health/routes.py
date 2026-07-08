@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from importlib import import_module
 import logging
 
 from fastapi import APIRouter, Depends, status
@@ -11,33 +10,23 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
 from app.config import Settings
+from app.infrastructure.cache import build_cache_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
 
-def _check_redis_readiness(settings: Settings) -> str | None:
+async def _check_redis_readiness(settings: Settings) -> str | None:
     if not settings.redis_healthcheck_enabled:
         return None
 
-    redis_url = settings.resolved_redis_url
-    if redis_url is None:
+    if not settings.upstash_redis_configured:
         return "misconfigured"
 
     try:
-        redis_module = import_module("redis")
-        redis_client = redis_module.Redis.from_url(
-            redis_url,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
-        try:
-            redis_client.ping()
-        finally:
-            close = getattr(redis_client, "close", None)
-            if callable(close):
-                close()
+        cache_client = build_cache_client(settings)
+        await cache_client.get("__upstash_healthcheck__")
     except Exception:
         logger.warning("Redis readiness check failed.", exc_info=True)
         return "unavailable"
@@ -64,7 +53,7 @@ async def readiness_check(
         )
 
     response: dict[str, str] = {"status": "ok", "database": "ok"}
-    redis_status = _check_redis_readiness(settings)
+    redis_status = await _check_redis_readiness(settings)
     if redis_status is None:
         return response
     if redis_status != "ok":

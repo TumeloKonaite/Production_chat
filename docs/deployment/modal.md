@@ -40,8 +40,16 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...
 SUPABASE_STORAGE_BUCKET=knowledge-files
 
-REDIS_URL=rediss://...
-REDIS_TOKEN=...
+ENABLE_REDIS=true
+UPSTASH_REDIS_REST_URL=https://...upstash.io
+UPSTASH_REDIS_REST_TOKEN=...
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS=20
+RATE_LIMIT_WINDOW_SECONDS=60
+EXACT_CACHE_ENABLED=true
+EXACT_CACHE_TTL_SECONDS=300
+REQUEST_LOCK_ENABLED=true
+REQUEST_LOCK_TTL_SECONDS=30
 
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1-mini
@@ -76,8 +84,16 @@ modal secret create production-chatbot-api-secrets `
   SUPABASE_URL=https://your-project.supabase.co `
   SUPABASE_SERVICE_ROLE_KEY=... `
   SUPABASE_STORAGE_BUCKET=knowledge-files `
-  REDIS_URL=rediss://... `
-  REDIS_TOKEN=... `
+  ENABLE_REDIS=true `
+  UPSTASH_REDIS_REST_URL=https://...upstash.io `
+  UPSTASH_REDIS_REST_TOKEN=... `
+  RATE_LIMIT_ENABLED=true `
+  RATE_LIMIT_MAX_REQUESTS=20 `
+  RATE_LIMIT_WINDOW_SECONDS=60 `
+  EXACT_CACHE_ENABLED=true `
+  EXACT_CACHE_TTL_SECONDS=300 `
+  REQUEST_LOCK_ENABLED=true `
+  REQUEST_LOCK_TTL_SECONDS=30 `
   LLM_PROVIDER=openai `
   LLM_MODEL=gpt-4.1-mini `
   LLM_API_KEY=...
@@ -154,7 +170,7 @@ uv run python .\scripts\trigger_ingestion.py --source-type uploaded_file --sourc
 - Modal runtime traffic should use `DATABASE_URL`. Do not run Alembic migrations automatically on startup.
 - Run migrations separately with `DATABASE_DIRECT_URL`.
 - `FRONTEND_ORIGIN` is required in production. Startup fails fast if it is missing.
-- If Redis-backed features are enabled but `REDIS_URL` is missing or unreachable, `/ready` returns `503`.
+- If Redis-backed features are enabled but Upstash credentials are missing or unreachable, `/ready` returns `503`.
 
 ## Inspect and retry jobs
 
@@ -181,4 +197,4 @@ Retries reuse the same trigger path. If the previous run failed, a new `pending`
 - Supabase SSL or pooler issues: ensure `DATABASE_URL` includes `?sslmode=require` and uses the transaction pooler host and port `6543`.
 - Migration connection issues: use the direct or session-mode URL for `DATABASE_DIRECT_URL`; do not point migrations at the runtime pooler unless Supabase explicitly documents that setup for your project.
 - Missing secrets: if startup fails on Modal, verify `production-chatbot-api-secrets` exists and includes `FRONTEND_ORIGIN`, `DATABASE_URL`, `INGESTION_BACKEND=modal`, and the active LLM key.
-- Redis readiness failures: if `/ready` reports `redis: "unavailable"`, verify the Upstash URL, token, and network reachability. If it reports `redis: "misconfigured"`, a Redis-backed feature is enabled without a usable `REDIS_URL`.
+- Redis readiness failures: if `/ready` reports `redis: "unavailable"`, verify the Upstash REST URL, token, and network reachability. If it reports `redis: "misconfigured"`, `ENABLE_REDIS=true` is set without usable Upstash credentials.

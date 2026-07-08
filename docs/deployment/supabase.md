@@ -109,7 +109,7 @@ The retrieval path uses cosine distance. After ingestion, the app ensures:
 - `ix_langchain_pg_embedding_collection_id`
 - `ix_langchain_pg_embedding_embedding_cosine_ivfflat`
 
-The IVFFlat index uses `vector_cosine_ops` with `lists = 100`.
+The IVFFlat index uses `vector_cosine_ops` with an adaptive `lists` value up to `100`.
 
 ## Re-ingestion and rebuilds
 

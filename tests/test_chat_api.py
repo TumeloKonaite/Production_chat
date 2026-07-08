@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.dependencies.chat_dependencies import (
     get_llm_service,
     get_observability_tracer,
+    get_request_lock,
     get_response_cache,
     get_retrieval_service,
     get_trace_service,
@@ -366,6 +367,14 @@ def build_test_settings(
     default_prompt_version: str = "v1_professional",
     **overrides: object,
 ) -> Settings:
+    legacy_cache_enabled = bool(overrides.get("enable_response_cache", False))
+    legacy_rate_limit_enabled = bool(overrides.get("enable_rate_limiting", False))
+    enable_redis = bool(
+        overrides.get(
+            "enable_redis",
+            legacy_cache_enabled or legacy_rate_limit_enabled or overrides.get("request_lock_enabled", False),
+        )
+    )
     values: dict[str, object] = {
         "database_url": "sqlite:///unused-for-tests.db",
         "openai_api_key": "test-key",
@@ -399,6 +408,16 @@ def build_test_settings(
         "dagshub_repo_owner": None,
         "dagshub_repo_name": None,
         "dagshub_token": None,
+        "enable_redis": enable_redis,
+        "upstash_redis_rest_url": "https://redis.example.test",
+        "upstash_redis_rest_token": "upstash-test-token",
+        "rate_limit_enabled": legacy_rate_limit_enabled,
+        "rate_limit_max_requests": 20,
+        "rate_limit_window_seconds": 60,
+        "exact_cache_enabled": legacy_cache_enabled,
+        "exact_cache_ttl_seconds": 300,
+        "request_lock_enabled": False,
+        "request_lock_ttl_seconds": 30,
         "response_cache_knowledge_base_version": "personal_knowledge_base",
     }
     values.update(overrides)
@@ -552,29 +571,24 @@ def test_ready_returns_service_unavailable_when_database_is_down() -> None:
 
 def test_ready_returns_ok_with_redis_when_enabled_and_reachable(tmp_path, monkeypatch) -> None:
     class HealthyRedisClient:
-        def ping(self) -> bool:
-            return True
-
-        def close(self) -> None:
+        async def get(self, key: str) -> str | None:
             return None
-
-    class HealthyRedisModule:
-        class Redis:
-            @staticmethod
-            def from_url(*_args, **_kwargs) -> HealthyRedisClient:
-                return HealthyRedisClient()
 
     fake_llm = FakeLLMService()
     client, _, _ = build_test_client(
         tmp_path,
         fake_llm,
         settings_overrides={
-            "enable_response_cache": True,
-            "redis_url": "rediss://cache.example.com:6379/0",
-            "redis_token": "redis-secret",
+            "enable_redis": True,
+            "upstash_redis_rest_url": "https://cache.example.com",
+            "upstash_redis_rest_token": "redis-secret",
         },
     )
-    monkeypatch.setattr(health_routes, "import_module", lambda _name: HealthyRedisModule)
+    monkeypatch.setattr(
+        health_routes,
+        "build_cache_client",
+        lambda _settings: HealthyRedisClient(),
+    )
 
     response = client.get("/ready")
 
@@ -590,9 +604,9 @@ def test_ready_returns_service_unavailable_when_redis_enabled_without_url(tmp_pa
         tmp_path,
         fake_llm,
         settings_overrides={
-            "enable_response_cache": True,
-            "redis_url": None,
-            "redis_token": None,
+            "enable_redis": True,
+            "upstash_redis_rest_url": None,
+            "upstash_redis_rest_token": None,
         },
     )
 
@@ -775,73 +789,15 @@ def test_chat_exact_cache_hit_skips_embedding_retrieval_and_llm(tmp_path) -> Non
     assert traces[0].trace_metadata["response_cache"]["response_cache_lookup_latency_ms"] == 4
 
 
-def test_chat_semantic_cache_hit_skips_retrieval_and_llm(tmp_path) -> None:
-    fake_llm = FakeLLMService(reply="This should not be used.")
-    fake_retrieval = FakeRetrievalService(query_embedding=[0.7, 0.8, 0.9])
-    fake_cache = FakeResponseCache(
-        exact_outcome=ResponseCacheLookupOutcome(
-            cache_type="exact",
-            hit=False,
-            reason="miss_no_exact_entry",
-            latency_ms=3,
-        ),
-        semantic_outcome=lambda request: ResponseCacheLookupOutcome(
-            cache_type="semantic",
-            hit=True,
-            reason="semantic_hit",
-            latency_ms=5,
-            entry=build_cache_lookup_result(
-                answer_text="Cached semantic answer.",
-                cache_type="semantic",
-                metadata_scope_hash=request.metadata_scope_hash,
-                prompt_version=request.metadata_scope.prompt_version,
-            ),
-            distance=0.04,
-            entry_id="entry-1",
-        ),
-    )
-    client, _, retrieval_service = build_test_client(
-        tmp_path,
-        fake_llm,
-        fake_retrieval,
-        fake_cache,
-        settings_overrides={
-            "enable_response_cache": True,
-            "enable_semantic_response_cache": True,
-        },
-    )
-
-    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
-
-    app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["message"] == "Cached semantic answer."
-    assert response.json()["response_cache_hit"] is True
-    assert response.json()["response_cache_type"] == "semantic"
-    assert response.json()["response_cache_reason"] == "semantic_hit"
-    assert response.json()["response_cache_distance"] == pytest.approx(0.04)
-    assert fake_llm.calls == []
-    assert retrieval_service.embed_query_calls == ["Tell me about Tumelo's work."]
-    assert retrieval_service.calls == []
-    assert fake_cache.semantic_requests[0].question_embedding == [0.7, 0.8, 0.9]
-
-
-def test_chat_cache_miss_reuses_embedding_and_writes_cache_entry(tmp_path) -> None:
+def test_chat_cache_miss_writes_exact_cache_entry(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Freshly generated answer.")
-    fake_retrieval = FakeRetrievalService(query_embedding=[0.4, 0.5, 0.6])
+    fake_retrieval = FakeRetrievalService()
     fake_cache = FakeResponseCache(
         exact_outcome=ResponseCacheLookupOutcome(
             cache_type="exact",
             hit=False,
             reason="miss_no_exact_entry",
             latency_ms=2,
-        ),
-        semantic_outcome=ResponseCacheLookupOutcome(
-            cache_type="semantic",
-            hit=False,
-            reason="miss_no_semantic_candidates",
-            latency_ms=6,
         ),
         store_outcome=ResponseCacheStoreOutcome(
             success=True,
@@ -855,10 +811,7 @@ def test_chat_cache_miss_reuses_embedding_and_writes_cache_entry(tmp_path) -> No
         fake_llm,
         fake_retrieval,
         fake_cache,
-        settings_overrides={
-            "enable_response_cache": True,
-            "enable_semantic_response_cache": True,
-        },
+        settings_overrides={"enable_response_cache": True},
     )
 
     response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
@@ -868,20 +821,60 @@ def test_chat_cache_miss_reuses_embedding_and_writes_cache_entry(tmp_path) -> No
     assert response.status_code == 200
     assert response.json()["response_cache_hit"] is False
     assert response.json()["response_cache_type"] is None
-    assert response.json()["response_cache_reason"] == "miss_no_semantic_candidates"
+    assert response.json()["response_cache_reason"] == "miss_no_exact_entry"
     assert response.json()["response_cache_distance"] is None
     assert fake_llm.calls != []
-    assert retrieval_service.embed_query_calls == ["Tell me about Tumelo's work."]
-    assert retrieval_service.query_embeddings_used == [[0.4, 0.5, 0.6]]
-    assert fake_cache.store_entries[0].question_embedding == [0.4, 0.5, 0.6]
+    assert retrieval_service.embed_query_calls == []
+    assert retrieval_service.query_embeddings_used == [None]
+    assert fake_cache.store_entries[0].question_embedding is None
 
     traces = fetch_chat_traces(session_factory)
-    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == (
-        "miss_no_semantic_candidates"
-    )
+    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == "miss_no_exact_entry"
     assert traces[0].trace_metadata["response_cache"]["response_cache_write_reason"] == (
         "write_success"
     )
+
+
+def test_chat_duplicate_inflight_request_returns_409(tmp_path) -> None:
+    class LockAlreadyHeld:
+        async def acquire(self, request_hash: str) -> bool:
+            return False
+
+        async def release(self, request_hash: str) -> None:
+            return None
+
+    fake_llm = FakeLLMService(reply="This should not be used.")
+    fake_retrieval = FakeRetrievalService()
+    fake_cache = FakeResponseCache(
+        exact_outcome=ResponseCacheLookupOutcome(
+            cache_type="exact",
+            hit=False,
+            reason="miss_no_exact_entry",
+            latency_ms=1,
+        )
+    )
+    client, _, _ = build_test_client(
+        tmp_path,
+        fake_llm,
+        fake_retrieval,
+        fake_cache,
+        settings_overrides={
+            "enable_redis": True,
+            "exact_cache_enabled": True,
+            "request_lock_enabled": True,
+        },
+    )
+    app.dependency_overrides[get_request_lock] = lambda: LockAlreadyHeld()
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "An identical request is already being processed. Please retry shortly."
+    }
+    assert fake_llm.calls == []
 
 
 def test_chat_exact_cache_hit_works_with_versioned_runtime_model_name(tmp_path) -> None:

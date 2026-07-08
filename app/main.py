@@ -27,6 +27,7 @@ from app.services.chat import (
     InvalidChatMessageError,
     InvalidConversationIdError,
 )
+from app.services.cache import DuplicateRequestInProgressError
 from app.services.feedback import (
     InvalidFeedbackTargetError,
     MessageFeedbackPersistenceError,
@@ -286,6 +287,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": exc.detail},
+        )
+
+    @app.exception_handler(DuplicateRequestInProgressError)
+    async def handle_duplicate_request_in_progress(
+        _: Request,
+        exc: DuplicateRequestInProgressError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc)},
         )
 
     @app.exception_handler(ChatPersistenceError)

@@ -40,6 +40,7 @@ def test_hash_scope_is_stable_for_equivalent_payloads() -> None:
 def test_noop_response_cache_returns_disabled_outcomes() -> None:
     cache = NoOpResponseCache()
     request = CacheLookupRequest(
+        request_hash="request-hash",
         normalized_question="what does tumelo do?",
         question_hash="question-hash",
         metadata_scope_hash="scope-hash",

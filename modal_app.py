@@ -9,6 +9,9 @@ APP_NAME = "production-chatbot-api"
 SECRET_NAME = "production-chatbot-api-secrets"
 REMOTE_ROOT = "/root/project"
 PYPROJECT_PATH = Path(__file__).with_name("pyproject.toml")
+PREBAKED_HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+FASTAPI_TIMEOUT_SECONDS = 300
+INGESTION_TIMEOUT_SECONDS = 300
 FALLBACK_RUNTIME_DEPENDENCIES = [
     "alembic>=1.16.0,<2.0.0",
     "boto3>=1.43.0,<2.0.0",
@@ -28,8 +31,6 @@ FALLBACK_RUNTIME_DEPENDENCIES = [
     "sqlalchemy>=2.0.0,<3.0.0",
     "uvicorn>=0.30.0,<1.0.0",
     "ruff>=0.15.20",
-    "redis>=5.2.0,<6.0.0",
-    "redisvl>=0.8.0,<1.0.0",
 ]
 
 
@@ -43,13 +44,22 @@ def _runtime_dependencies() -> list[str]:
     base_dependencies = list(project_config.get("dependencies", []))
     optional_dependencies = project_config.get("optional-dependencies", {})
     deploy_dependencies = list(optional_dependencies.get("deploy", []))
-    response_cache_dependencies = list(optional_dependencies.get("response-cache", []))
-    return base_dependencies + deploy_dependencies + response_cache_dependencies
+    return base_dependencies + deploy_dependencies
 
 
 modal_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(*_runtime_dependencies())
+    .env(
+        {
+            "HF_HOME": "/cache/huggingface",
+            "SENTENCE_TRANSFORMERS_HOME": "/cache/sentence_transformers",
+        }
+    )
+    .run_commands(
+        "python -c \"from sentence_transformers import SentenceTransformer; "
+        f"SentenceTransformer('{PREBAKED_HF_EMBEDDING_MODEL}')\""
+    )
     .add_local_dir("app", remote_path=f"{REMOTE_ROOT}/app")
     .add_local_dir("alembic", remote_path=f"{REMOTE_ROOT}/alembic")
     .add_local_dir("evals", remote_path=f"{REMOTE_ROOT}/evals")
@@ -63,7 +73,7 @@ app = modal.App(name=APP_NAME)
 @app.function(
     image=modal_image,
     secrets=[modal.Secret.from_name(SECRET_NAME)],
-    timeout=150,
+    timeout=FASTAPI_TIMEOUT_SECONDS,
 )
 @modal.asgi_app()
 def fastapi_app():
@@ -80,7 +90,7 @@ def fastapi_app():
 @app.function(
     image=modal_image,
     secrets=[modal.Secret.from_name(SECRET_NAME)],
-    timeout=150,
+    timeout=INGESTION_TIMEOUT_SECONDS,
 )
 def run_ingestion_job(job_id: str) -> dict[str, object]:
     import sys
