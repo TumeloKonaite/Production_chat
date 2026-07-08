@@ -37,6 +37,8 @@ def test_repository_creates_and_updates_trace(tmp_path) -> None:
                 status=TraceStatus.STARTED,
                 llm_provider="openrouter",
                 llm_model="openai/gpt-4o-mini",
+                observability_provider="langfuse",
+                external_trace_id="lf-trace-123",
                 retriever_type="vector",
                 embedding_provider="openai",
                 embedding_model="text-embedding-3-small",
@@ -62,6 +64,8 @@ def test_repository_creates_and_updates_trace(tmp_path) -> None:
     assert updated.output_text == "Tumelo has built several AI and backend projects."
     assert updated.total_tokens == 1520
     assert float(updated.estimated_cost_usd) == 0.001234
+    assert updated.observability_provider == "langfuse"
+    assert updated.external_trace_id == "lf-trace-123"
     assert updated.trace_metadata["environment"] == "test"
 
 

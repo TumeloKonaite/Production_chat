@@ -20,6 +20,7 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 1000
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 200
+LANGFUSE_FEATURE_FLAG = "ENABLE_LANGFUSE_OBSERVABILITY"
 SUPPORTED_APP_ENVS = frozenset({"local", "production", "test"})
 SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
@@ -28,6 +29,7 @@ SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
 SUPPORTED_STORAGE_PROVIDERS = frozenset({"local", "minio", "supabase"})
 SUPPORTED_VECTOR_STORE_PROVIDERS = frozenset({"pgvector", "supabase_pgvector"})
 SUPPORTED_INGESTION_BACKENDS = frozenset({"local", "modal"})
+PLACEHOLDER_URL_MARKERS = ("...", "<", ">")
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,16 +340,59 @@ def _inject_redis_token(redis_url: str, redis_token: str | None) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
+def _validate_configured_url(
+    name: str,
+    value: str | None,
+    *,
+    allowed_schemes: frozenset[str] | None = None,
+) -> None:
+    if value is None:
+        return
+
+    normalized = value.strip()
+    if not normalized:
+        return
+
+    if any(marker in normalized for marker in PLACEHOLDER_URL_MARKERS):
+        raise ValueError(
+            f"{name} contains placeholder text. Replace example values with the real deployed URL."
+        )
+
+    parsed = urlsplit(normalized)
+    if not parsed.scheme:
+        raise ValueError(f"{name} must be a valid URL.")
+    if allowed_schemes is not None and parsed.scheme.casefold() not in allowed_schemes:
+        supported = ", ".join(sorted(allowed_schemes))
+        raise ValueError(f"{name} must use one of these schemes: {supported}.")
+
+    hostname = parsed.hostname
+    if hostname is None or not hostname.strip():
+        raise ValueError(f"{name} must include a valid hostname.")
+    try:
+        hostname.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError(f"{name} contains an invalid hostname.") from exc
+
+
 def _validate_production_requirements(
     *,
     app_env: str,
     frontend_origin: str | None,
     database_url: str | None,
+    database_direct_url: str | None,
     llm_api_key: str | None,
     enable_redis: bool,
     upstash_redis_rest_url: str | None,
     upstash_redis_rest_token: str | None,
 ) -> None:
+    _validate_configured_url("DATABASE_URL", database_url)
+    _validate_configured_url("DATABASE_DIRECT_URL", database_direct_url)
+    _validate_configured_url(
+        "UPSTASH_REDIS_REST_URL",
+        upstash_redis_rest_url,
+        allowed_schemes=frozenset({"http", "https"}),
+    )
+
     if app_env != "production":
         if enable_redis and (upstash_redis_rest_url is None or upstash_redis_rest_token is None):
             raise ValueError(
@@ -439,6 +484,7 @@ def get_settings() -> Settings:
     database_url = _get_non_empty_env("DATABASE_URL")
     if database_url is None and app_env != "production":
         database_url = DEFAULT_LOCAL_DATABASE_URL
+    database_direct_url = _get_non_empty_env("DATABASE_DIRECT_URL")
     frontend_origin = _get_non_empty_env("FRONTEND_ORIGIN")
 
     enable_redis = _parse_bool(
@@ -451,6 +497,7 @@ def get_settings() -> Settings:
         app_env=app_env,
         frontend_origin=frontend_origin,
         database_url=database_url,
+        database_direct_url=database_direct_url,
         llm_api_key=llm_api_key,
         enable_redis=enable_redis,
         upstash_redis_rest_url=upstash_redis_rest_url,
@@ -498,15 +545,19 @@ def get_settings() -> Settings:
         )
 
     enable_langfuse_observability = _parse_bool(
-        _get_first_env("ENABLE_LANGFUSE", "ENABLE_LANGFUSE_OBSERVABILITY"),
+        _get_first_env("ENABLE_LANGFUSE_OBSERVABILITY", "ENABLE_LANGFUSE"),
         default=False,
     )
     langfuse_public_key = _get_non_empty_env("LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key = _get_non_empty_env("LANGFUSE_SECRET_KEY")
     if enable_langfuse_observability and langfuse_public_key is None:
-        raise ValueError("LANGFUSE_PUBLIC_KEY is required when ENABLE_LANGFUSE=true.")
+        raise ValueError(
+            f"LANGFUSE_PUBLIC_KEY is required when {LANGFUSE_FEATURE_FLAG}=true."
+        )
     if enable_langfuse_observability and langfuse_secret_key is None:
-        raise ValueError("LANGFUSE_SECRET_KEY is required when ENABLE_LANGFUSE=true.")
+        raise ValueError(
+            f"LANGFUSE_SECRET_KEY is required when {LANGFUSE_FEATURE_FLAG}=true."
+        )
     langfuse_sample_rate = _get_float_env(
         "LANGFUSE_SAMPLE_RATE",
         1.0,
@@ -631,7 +682,7 @@ def get_settings() -> Settings:
         app_env=app_env,
         frontend_origin=frontend_origin,
         database_url=database_url or DEFAULT_LOCAL_DATABASE_URL,
-        database_direct_url=_get_non_empty_env("DATABASE_DIRECT_URL"),
+        database_direct_url=database_direct_url,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,
         openrouter_api_key=openrouter_api_key,

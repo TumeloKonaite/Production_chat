@@ -124,6 +124,10 @@ class MessageFeedbackRepository:
             "conversation_id": feedback.conversation_id,
             "trace_id": trace.id,
         }
+        if trace.external_trace_id is not None:
+            metadata["feedback"]["external_trace_id"] = trace.external_trace_id
+            if trace.observability_provider == "langfuse":
+                metadata["feedback"]["langfuse_trace_id"] = trace.external_trace_id
         return metadata
 
     def _commit_and_refresh(self, feedback: MessageFeedback) -> MessageFeedback:

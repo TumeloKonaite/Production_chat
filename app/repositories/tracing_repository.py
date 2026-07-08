@@ -30,6 +30,8 @@ class TraceRepository:
             error_message=payload.error_message,
             llm_provider=payload.llm_provider,
             llm_model=payload.llm_model,
+            observability_provider=payload.observability_provider,
+            external_trace_id=payload.external_trace_id,
             prompt_version=payload.prompt_version,
             retriever_type=payload.retriever_type,
             embedding_provider=payload.embedding_provider,
@@ -76,6 +78,13 @@ class TraceRepository:
             trace.llm_provider = payload.llm_provider
         if "llm_model" in payload.model_fields_set:
             trace.llm_model = payload.llm_model
+        if (
+            "observability_provider" in payload.model_fields_set
+            and payload.observability_provider is not None
+        ):
+            trace.observability_provider = payload.observability_provider
+        if "external_trace_id" in payload.model_fields_set and payload.external_trace_id is not None:
+            trace.external_trace_id = payload.external_trace_id
         if "prompt_version" in payload.model_fields_set:
             trace.prompt_version = payload.prompt_version
         if "retriever_type" in payload.model_fields_set:

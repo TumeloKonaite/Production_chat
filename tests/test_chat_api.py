@@ -23,6 +23,7 @@ from app.api.dependencies.common_dependencies import get_app_settings, get_db_se
 import app.api.health.routes as health_routes
 from app.config import Settings
 from app.domain.tracing import TraceStatus, TraceStepType
+from app.infrastructure.observability import ObservabilityTrace
 from app.infrastructure.llm import UnknownModelError
 from app.main import app
 from app.repositories.db.base import Base
@@ -249,11 +250,17 @@ class FailingObservabilityTracer:
     def start_chat_request(self, **kwargs):
         raise RuntimeError("Langfuse start failed")
 
-    def trace_retrieval(self, *args, **kwargs):
+    def start_retrieval(self, *args, **kwargs):
         raise RuntimeError("Langfuse retrieval failed")
 
-    def trace_llm_call(self, *args, **kwargs):
+    def complete_retrieval(self, *args, **kwargs):
+        raise RuntimeError("Langfuse retrieval completion failed")
+
+    def start_llm_call(self, *args, **kwargs):
         raise RuntimeError("Langfuse llm failed")
+
+    def complete_llm_call(self, *args, **kwargs):
+        raise RuntimeError("Langfuse llm completion failed")
 
     def complete_chat_request(self, *args, **kwargs):
         raise RuntimeError("Langfuse completion failed")
@@ -263,6 +270,35 @@ class FailingObservabilityTracer:
 
     def flush(self):
         raise RuntimeError("Langfuse flush failed")
+
+
+class ProviderObservabilityTracer:
+    def start_chat_request(self, **kwargs):
+        return ObservabilityTrace(
+            provider="langfuse",
+            external_trace_id="lf-trace-123",
+        )
+
+    def start_retrieval(self, *args, **kwargs):
+        return None
+
+    def complete_retrieval(self, *args, **kwargs):
+        return None
+
+    def start_llm_call(self, *args, **kwargs):
+        return None
+
+    def complete_llm_call(self, *args, **kwargs):
+        return None
+
+    def complete_chat_request(self, *args, **kwargs):
+        return None
+
+    def capture_error(self, *args, **kwargs):
+        return None
+
+    def flush(self):
+        return None
 
 
 def build_retrieved_chunk(
@@ -569,6 +605,25 @@ def test_ready_returns_service_unavailable_when_database_is_down() -> None:
     assert response.json() == {"status": "degraded", "database": "unavailable"}
 
 
+def test_ready_returns_service_unavailable_when_database_driver_raises_non_sqlalchemy_error() -> None:
+    class FailingSession:
+        def execute(self, *_args, **_kwargs) -> None:
+            raise UnicodeError("label empty or too long")
+
+    def override_db_session() -> Generator[FailingSession, None, None]:
+        yield FailingSession()
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    client = TestClient(app)
+
+    response = client.get("/ready")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "degraded", "database": "unavailable"}
+
+
 def test_ready_returns_ok_with_redis_when_enabled_and_reachable(tmp_path, monkeypatch) -> None:
     class HealthyRedisClient:
         async def get(self, key: str) -> str | None:
@@ -718,8 +773,15 @@ def test_chat_creates_internal_trace_records(tmp_path) -> None:
     assert traces[0].llm_model == "gpt-4.1-mini"
     assert traces[0].prompt_version == "v1_professional"
     assert traces[0].retriever_type == "vector"
+    assert traces[0].observability_provider is None
+    assert traces[0].external_trace_id is None
     assert traces[0].trace_metadata["route"] == "/chat"
     assert traces[0].trace_metadata["channel"] == "web_chat"
+    assert traces[0].trace_metadata["app_environment"] == "local"
+    assert traces[0].trace_metadata["vector_store_provider"] == "pgvector"
+    assert traces[0].trace_metadata["embedding_dimension"] == 384
+    assert traces[0].trace_metadata["top_k"] == 5
+    assert traces[0].trace_metadata["internal_trace_id"] == traces[0].id
     assert [step.step_type for step in steps] == [
         TraceStepType.REQUEST_RECEIVED,
         TraceStepType.RETRIEVAL_STARTED,
@@ -734,12 +796,38 @@ def test_chat_creates_internal_trace_records(tmp_path) -> None:
         "retrieved_chunks": [
             {
                 "chunk_id": "chunk-1",
+                "source_document_id": None,
                 "source": "projects.md",
+                "source_type": "markdown",
                 "section": "Portfolio Chatbot",
+                "retrieval_rank": None,
+                "final_rank": None,
                 "score": 0.91,
             }
         ]
     }
+
+
+def test_chat_persists_external_langfuse_trace_id_when_available(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Trace-aware response.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+    app.dependency_overrides[get_observability_tracer] = lambda: ProviderObservabilityTracer()
+
+    response = client.post("/chat", json={"message": "Tell me about observability."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+    traces = fetch_chat_traces(session_factory)
+    messages = fetch_messages(session_factory)
+
+    assert traces[0].observability_provider == "langfuse"
+    assert traces[0].external_trace_id == "lf-trace-123"
+    assert traces[0].trace_metadata["external_trace_id"] == "lf-trace-123"
+    assert traces[0].trace_metadata["langfuse_trace_id"] == "lf-trace-123"
+    assert messages[1].message_metadata["external_trace_id"] == "lf-trace-123"
+    assert messages[1].message_metadata["langfuse_trace_id"] == "lf-trace-123"
 
 
 def test_chat_exact_cache_hit_skips_embedding_retrieval_and_llm(tmp_path) -> None:

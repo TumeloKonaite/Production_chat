@@ -58,6 +58,8 @@ class ChatTraceCreate(BaseModel):
     error_message: str | None = None
     llm_provider: str | None = Field(default=None, max_length=50)
     llm_model: str | None = Field(default=None, max_length=255)
+    observability_provider: str | None = Field(default=None, max_length=50)
+    external_trace_id: str | None = Field(default=None, max_length=255)
     prompt_version: str | None = Field(default=None, max_length=50)
     retriever_type: str | None = Field(default=None, max_length=100)
     embedding_provider: str | None = Field(default=None, max_length=50)
@@ -83,6 +85,8 @@ class ChatTraceUpdate(BaseModel):
     error_message: str | None = None
     llm_provider: str | None = Field(default=None, max_length=50)
     llm_model: str | None = Field(default=None, max_length=255)
+    observability_provider: str | None = Field(default=None, max_length=50)
+    external_trace_id: str | None = Field(default=None, max_length=255)
     prompt_version: str | None = Field(default=None, max_length=50)
     retriever_type: str | None = Field(default=None, max_length=100)
     embedding_provider: str | None = Field(default=None, max_length=50)
@@ -109,6 +113,8 @@ class ChatTraceRead(BaseModel):
     error_message: str | None = None
     llm_provider: str | None = None
     llm_model: str | None = None
+    observability_provider: str | None = None
+    external_trace_id: str | None = None
     prompt_version: str | None = None
     retriever_type: str | None = None
     embedding_provider: str | None = None

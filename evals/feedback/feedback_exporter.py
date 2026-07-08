@@ -324,10 +324,13 @@ def _extract_feedback_details(trace: ChatTrace) -> _FeedbackDetails | None:
                 payload.get("expected_source_documents")
             )
         langfuse_trace_id = langfuse_trace_id or _normalize_optional_string(
-            payload.get("langfuse_trace_id")
+            payload.get("langfuse_trace_id") or payload.get("external_trace_id")
         )
         if top_k is None:
             top_k = _normalize_optional_int(payload.get("top_k") or payload.get("retrieval_top_k"))
+
+    if langfuse_trace_id is None and trace.observability_provider == "langfuse":
+        langfuse_trace_id = _normalize_optional_string(trace.external_trace_id)
 
     if rating is None:
         rating, reason = _infer_feedback_from_trace(trace=trace, reason=reason)

@@ -716,9 +716,11 @@ LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 ```
 
 - When `ENABLE_LANGFUSE_OBSERVABILITY=false`, the backend starts normally without Langfuse credentials.
-- When `ENABLE_LANGFUSE_OBSERVABILITY=true`, both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are required.
+- When `ENABLE_LANGFUSE_OBSERVABILITY=true`, both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are required and Langfuse initialization must succeed at startup.
 - Retrieval traces log source names, chunk IDs, scores, and short content previews only; full retrieved documents are not sent by default.
-- The chat flow performs a best-effort `flush()` after each request for short-lived deployments such as Modal.
+- Runtime Langfuse failures are fail-open: chat responses still succeed, provider errors are logged safely, and the chat flow performs a best-effort `flush()` after each request for short-lived deployments such as Modal.
+- Internal `chat_traces.id` remains the primary application trace key. When Langfuse exposes a provider trace ID, it is also stored on the internal trace as optional `external_trace_id` metadata and propagated as `langfuse_trace_id` for feedback/export workflows.
+- To find a production request in Langfuse Cloud, search the trace list for the stored `external_trace_id` / `langfuse_trace_id` or start from the internal `chat_traces` row and follow that provider ID.
 - Keep MLflow and DagsHub enabled separately for experiment runs, metrics, and eval comparisons.
 
 ### Exporting bad Langfuse traces into eval review queues

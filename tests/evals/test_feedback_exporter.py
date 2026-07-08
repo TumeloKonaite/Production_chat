@@ -231,6 +231,8 @@ def _seed_feedback_trace(
         status="success",
         llm_provider="openai",
         llm_model="gpt-4.1-mini",
+        observability_provider="langfuse",
+        external_trace_id="lf-trace-123",
         prompt_version="v1_professional",
         retriever_type="vector",
         embedding_provider="hf",

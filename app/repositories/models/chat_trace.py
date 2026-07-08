@@ -43,6 +43,8 @@ class ChatTrace(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    observability_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    external_trace_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     retriever_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     embedding_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)

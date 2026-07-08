@@ -30,6 +30,7 @@ class SupportsLangfuseClient(Protocol):
 @dataclass(slots=True)
 class ObservationHandle:
     observation: SupportsObservation
+    trace_id: str | None = None
 
     def update(self, **kwargs: Any) -> None:
         self.observation.update(**kwargs)
@@ -43,6 +44,7 @@ class RootObservationHandle:
     observation: SupportsObservation
     observation_context: AbstractContextManager[SupportsObservation]
     attributes_context: AbstractContextManager[object]
+    trace_id: str | None = None
 
     def update(self, **kwargs: Any) -> None:
         self.observation.update(**kwargs)
@@ -144,6 +146,7 @@ class LangfuseClient:
             observation=observation,
             observation_context=observation_context,
             attributes_context=attributes_context,
+            trace_id=self._extract_trace_id(observation),
         )
 
     def start_observation(
@@ -166,7 +169,22 @@ class LangfuseClient:
             model=model,
             model_parameters=model_parameters,
         )
-        return ObservationHandle(observation=observation)
+        return ObservationHandle(
+            observation=observation,
+            trace_id=self._extract_trace_id(observation),
+        )
 
     def flush(self) -> None:
         self._client.flush()
+
+    def _extract_trace_id(self, observation: object) -> str | None:
+        for candidate in (
+            getattr(observation, "trace_id", None),
+            getattr(getattr(observation, "trace", None), "id", None),
+            getattr(getattr(observation, "trace", None), "trace_id", None),
+        ):
+            if isinstance(candidate, str):
+                normalized = candidate.strip()
+                if normalized:
+                    return normalized
+        return None
