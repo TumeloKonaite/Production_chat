@@ -204,6 +204,7 @@ The backend exposes:
 - `GET /ready` for database-backed readiness
 
 See `docs/deployment/supabase.md` for Supabase-specific production setup, URL formats, SSL requirements, and migration commands.
+See `docs/deployment/modal.md` for Modal deployment, secret setup, and production smoke tests.
 
 If you want the local Postgres and Redis instances from `docker-compose.yml`, start them first so the database is listening on `127.0.0.1:5434` and Redis is listening on `127.0.0.1:6379`:
 

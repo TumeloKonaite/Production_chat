@@ -26,6 +26,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+deploy = [
+    "modal>=1.0.0,<2.0.0",
+]
 response-cache = [
     "redis>=5.2.0,<6.0.0",
     "redisvl>=0.8.0,<1.0.0",

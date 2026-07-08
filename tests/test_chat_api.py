@@ -19,6 +19,7 @@ from app.api.dependencies.chat_dependencies import (
     get_trace_service,
 )
 from app.api.dependencies.common_dependencies import get_app_settings, get_db_session
+import app.api.health.routes as health_routes
 from app.config import Settings
 from app.domain.tracing import TraceStatus, TraceStepType
 from app.infrastructure.llm import UnknownModelError
@@ -547,6 +548,64 @@ def test_ready_returns_service_unavailable_when_database_is_down() -> None:
 
     assert response.status_code == 503
     assert response.json() == {"status": "degraded", "database": "unavailable"}
+
+
+def test_ready_returns_ok_with_redis_when_enabled_and_reachable(tmp_path, monkeypatch) -> None:
+    class HealthyRedisClient:
+        def ping(self) -> bool:
+            return True
+
+        def close(self) -> None:
+            return None
+
+    class HealthyRedisModule:
+        class Redis:
+            @staticmethod
+            def from_url(*_args, **_kwargs) -> HealthyRedisClient:
+                return HealthyRedisClient()
+
+    fake_llm = FakeLLMService()
+    client, _, _ = build_test_client(
+        tmp_path,
+        fake_llm,
+        settings_overrides={
+            "enable_response_cache": True,
+            "redis_url": "rediss://cache.example.com:6379/0",
+            "redis_token": "redis-secret",
+        },
+    )
+    monkeypatch.setattr(health_routes, "import_module", lambda _name: HealthyRedisModule)
+
+    response = client.get("/ready")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "database": "ok", "redis": "ok"}
+
+
+def test_ready_returns_service_unavailable_when_redis_enabled_without_url(tmp_path) -> None:
+    fake_llm = FakeLLMService()
+    client, _, _ = build_test_client(
+        tmp_path,
+        fake_llm,
+        settings_overrides={
+            "enable_response_cache": True,
+            "redis_url": None,
+            "redis_token": None,
+        },
+    )
+
+    response = client.get("/ready")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "degraded",
+        "database": "ok",
+        "redis": "misconfigured",
+    }
 
 
 def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None:

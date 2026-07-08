@@ -9,6 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .env
+.env.modal
 .pytest_cache/
 .pytest_tmp/
 .uv-cache/
