@@ -383,7 +383,28 @@ curl -X POST http://localhost:8000/api/tavus/conversations/end \
 
 ## Knowledge ingestion
 
-The markdown knowledge source of truth lives under `app/knowledge/source/`. Both the local CLI script and the protected admin API call the same backend ingestion service.
+The markdown knowledge source of truth lives under `app/knowledge/source/`.
+
+Local CLI ingestion still runs directly in-process for development:
+
+```bash
+uv run python .\scripts\ingest_knowledge.py
+```
+
+The protected ingestion trigger now creates a `knowledge_ingestion_jobs` row and dispatches the actual work through the configured backend:
+
+```env
+INGESTION_BACKEND=local
+MODAL_INGESTION_APP_NAME=production-chatbot-api
+MODAL_INGESTION_FUNCTION_NAME=run_ingestion_job
+```
+
+Backend behavior:
+
+- `local`: create the job and execute it in a local background thread so the HTTP response returns immediately.
+- `modal`: create the job and dispatch the worker to Modal with `modal.Function.from_name(...).spawn(...)`.
+
+Uploaded-file jobs include idempotency protection keyed off source identity, checksum, embedding config, and chunking config. That prevents accidental duplicate ingestion while still allowing re-ingestion after content or embedding changes.
 
 Chunking is configurable through:
 
@@ -471,12 +492,25 @@ uv run python .\scripts\ingest_knowledge.py
 
 The CLI prints the chunking config used for that ingestion run.
 
+### Trigger ingestion from a script
+
+```bash
+uv run python .\scripts\trigger_ingestion.py --source-type uploaded_file --source-id <file_id>
+```
+
+You can also queue a local-directory rebuild:
+
+```bash
+uv run python .\scripts\trigger_ingestion.py --source-type local_directory
+```
+
 ### Trigger ingestion from the backend
 
 Set an ingestion secret in `.env`:
 
 ```env
 INGESTION_API_SECRET=dev-secret-change-me
+INGESTION_BACKEND=local
 ```
 
 Run the backend:
@@ -496,15 +530,43 @@ Example response:
 
 ```json
 {
-  "status": "ok",
-  "documents_loaded": 9,
-  "results": [
-    {
-      "source": "profile.md",
-      "chunk_count": 3
-    }
-  ]
+  "job_id": "0c7985f8-64a2-4c49-bc86-77f6111c1fd7",
+  "status": "queued",
+  "source_type": "local_directory",
+  "file_id": null
 }
+```
+
+If the same uploaded file has already completed with the same content and embedding/chunking config, the trigger returns `status: "skipped"` and does not dispatch a second ingestion run.
+
+### Inspect ingestion jobs
+
+Job state lives in `knowledge_ingestion_jobs`. Useful columns include:
+
+- `status`
+- `chunk_count`
+- `embedding_provider`
+- `embedding_model`
+- `embedding_dimension`
+- `error_message`
+- `started_at`
+- `completed_at`
+
+Example query:
+
+```sql
+select
+  id,
+  source_type,
+  file_id,
+  status,
+  chunk_count,
+  error_message,
+  created_at,
+  completed_at
+from knowledge_ingestion_jobs
+order by created_at desc
+limit 20;
 ```
 
 ### Frontend handoff

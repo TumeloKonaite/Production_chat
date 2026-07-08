@@ -390,7 +390,9 @@ def test_knowledge_ingestion_service_rejects_already_ingesting_uploaded_file(tmp
             )
 
 
-def test_knowledge_ingestion_service_rejects_already_ingested_uploaded_file(tmp_path) -> None:
+def test_knowledge_ingestion_service_allows_reingesting_previously_ingested_uploaded_file(
+    tmp_path,
+) -> None:
     session_factory = build_session_factory(tmp_path)
     retrieval_service = FakeRetrievalService()
 
@@ -398,27 +400,29 @@ def test_knowledge_ingestion_service_rejects_already_ingested_uploaded_file(tmp_
         knowledge_file = create_uploaded_knowledge_file(
             session,
             filename="company-profile.md",
+            storage_path="uploaded/company-profile.md",
             status="ingested",
         )
         ingestion_service = KnowledgeIngestionService(
             retrieval_service=retrieval_service,
             uploaded_file_loader=UploadedKnowledgeFileLoader(
-                storage=MappingStorage({}),
+                storage=MappingStorage(
+                    {"uploaded/company-profile.md": b"# Company\n\nUpdated content.\n"}
+                ),
                 storage_provider="local",
             ),
         )
 
-        with pytest.raises(
-            KnowledgeIngestionConflictError,
-            match="already been ingested",
-        ):
-            ingestion_service.run(
-                session,
-                request=KnowledgeIngestionRequest(
-                    source_type="uploaded_file",
-                    file_id=UUID(knowledge_file.id),
-                ),
-            )
+        result = ingestion_service.run(
+            session,
+            request=KnowledgeIngestionRequest(
+                source_type="uploaded_file",
+                file_id=UUID(knowledge_file.id),
+            ),
+        )
+
+    assert result.status == "ingested"
+    assert result.chunks_created == 1
 
 
 def test_knowledge_ingestion_service_marks_missing_storage_object_as_failed(tmp_path) -> None:

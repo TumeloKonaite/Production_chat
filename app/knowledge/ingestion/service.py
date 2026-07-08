@@ -198,12 +198,10 @@ class KnowledgeIngestionService:
 
     def _validate_ingestable_status(self, knowledge_file: KnowledgeFile) -> None:
         status_value = knowledge_file.status.casefold()
-        if status_value in {"uploaded", "failed"}:
+        if status_value in {"uploaded", "failed", "ingested"}:
             return
         if status_value == "ingesting":
             raise KnowledgeIngestionConflictError("Knowledge file is already being ingested.")
-        if status_value == "ingested":
-            raise KnowledgeIngestionConflictError("Knowledge file has already been ingested.")
         if status_value == "deleted":
             raise KnowledgeIngestionGoneError("Knowledge file has been deleted.")
         raise KnowledgeIngestionServiceError("Knowledge file is in an unsupported status.")
