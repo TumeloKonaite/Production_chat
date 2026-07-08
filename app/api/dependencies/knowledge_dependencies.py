@@ -14,7 +14,8 @@ def build_knowledge_ingestion_service(settings: Settings) -> KnowledgeIngestionS
     return KnowledgeIngestionService(
         retrieval_service=RetrievalService(settings=settings),
         uploaded_file_loader=UploadedKnowledgeFileLoader(
-            storage=create_knowledge_file_storage(settings)
+            storage=create_knowledge_file_storage(settings),
+            storage_provider=settings.storage_provider,
         ),
         chunk_size=settings.knowledge_chunk_size,
         chunk_overlap=settings.knowledge_chunk_overlap,

@@ -78,6 +78,16 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
     monkeypatch.delenv("DATABASE_DIRECT_URL", raising=False)
     monkeypatch.delenv("VECTOR_STORE_PROVIDER", raising=False)
+    monkeypatch.delenv("STORAGE_PROVIDER", raising=False)
+    monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
+    monkeypatch.delenv("MINIO_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("MINIO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("MINIO_BUCKET", raising=False)
+    monkeypatch.delenv("MINIO_SECURE", raising=False)
+    monkeypatch.delenv("LOCAL_STORAGE_PATH", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_STORAGE_BUCKET", raising=False)
     monkeypatch.delenv("CHUNK_SIZE", raising=False)
     monkeypatch.delenv("CHUNK_OVERLAP", raising=False)
     monkeypatch.delenv("RETRIEVER_TYPE", raising=False)
@@ -128,6 +138,7 @@ def test_get_settings_uses_default_chunking_values(monkeypatch: pytest.MonkeyPat
     assert settings.minio_secure is False
     assert settings.local_storage_path == ".storage"
     assert settings.knowledge_upload_max_bytes == 10485760
+    assert settings.supabase_storage_bucket == "knowledge-files"
     assert settings.knowledge_chunk_size == DEFAULT_KNOWLEDGE_CHUNK_SIZE
     assert settings.knowledge_chunk_overlap == DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     assert settings.retriever_type == "vector"
@@ -395,6 +406,22 @@ def test_get_settings_uses_configured_storage_values(
     assert settings.knowledge_upload_max_bytes == 2048
 
 
+def test_get_settings_uses_supabase_storage_provider_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE_PROVIDER", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SUPABASE_STORAGE_BUCKET", "knowledge-files-prod")
+
+    settings = get_settings()
+
+    assert settings.storage_provider == "supabase"
+    assert settings.supabase_url == "https://project.supabase.co"
+    assert settings.supabase_service_role_key == "service-role"
+    assert settings.supabase_storage_bucket == "knowledge-files-prod"
+
+
 def test_get_settings_uses_no_frontend_origin_in_production_when_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -641,5 +668,19 @@ def test_get_settings_requires_supabase_credentials_for_supabase_pgvector(
     with pytest.raises(
         ValueError,
         match="SUPABASE_URL is required when VECTOR_STORE_PROVIDER=supabase_pgvector.",
+    ):
+        get_settings()
+
+
+def test_get_settings_requires_supabase_credentials_for_supabase_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE_PROVIDER", "supabase")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="SUPABASE_URL is required when STORAGE_PROVIDER=supabase.",
     ):
         get_settings()

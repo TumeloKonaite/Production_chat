@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import json
 import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import httpx
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -16,6 +18,7 @@ from app.config import Settings
 from app.infrastructure.storage import (
     LocalKnowledgeFileStorage,
     MinioKnowledgeFileStorage,
+    SupabaseKnowledgeFileStorage,
     create_knowledge_file_storage,
 )
 from app.repositories.db.base import Base
@@ -74,6 +77,9 @@ def build_test_settings(tmp_path: Path, **overrides: object) -> Settings:
         "minio_secure": False,
         "local_storage_path": str(tmp_path / "storage"),
         "knowledge_upload_max_bytes": 10485760,
+        "supabase_url": "https://project.supabase.co",
+        "supabase_service_role_key": "service-role",
+        "supabase_storage_bucket": "knowledge-files",
     }
     values.update(overrides)
     return Settings(**values)
@@ -110,6 +116,17 @@ def build_upload_service(settings: Settings) -> KnowledgeFileUploadService:
     return KnowledgeFileUploadService(
         settings=settings,
         storage=create_knowledge_file_storage(settings),
+    )
+
+
+def build_supabase_http_client(handler) -> httpx.Client:
+    return httpx.Client(
+        base_url="https://project.supabase.co/storage/v1",
+        headers={
+            "apiKey": "service-role",
+            "Authorization": "Bearer service-role",
+        },
+        transport=httpx.MockTransport(handler),
     )
 
 
@@ -288,6 +305,58 @@ def test_knowledge_file_upload_metadata_failure_triggers_cleanup(tmp_path: Path)
     assert storage.deleted_paths == storage.uploaded_paths
 
 
+def test_knowledge_file_upload_metadata_failure_triggers_supabase_cleanup(tmp_path: Path) -> None:
+    requests: list[tuple[str, str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        requests.append((request.method, request.url.path, body))
+        if request.method == "POST":
+            return httpx.Response(200, json={"Key": "ignored"})
+        if request.method == "DELETE":
+            return httpx.Response(200, json=[{"name": "company-profile.md"}])
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    class FailingRepository:
+        def __init__(self, session: Session) -> None:
+            self._session = session
+
+        def create(self, knowledge_file: KnowledgeFile) -> KnowledgeFile:
+            raise KnowledgeFileRepositoryError()
+
+    settings = build_test_settings(tmp_path, storage_provider="supabase")
+    session_factory = build_session_factory(tmp_path)
+    storage = SupabaseKnowledgeFileStorage(
+        url=settings.supabase_url or "",
+        service_role_key=settings.supabase_service_role_key or "",
+        bucket=settings.supabase_storage_bucket or "",
+        http_client=build_supabase_http_client(handler),
+    )
+    upload_service = KnowledgeFileUploadService(
+        settings=settings,
+        storage=storage,
+        repository_factory=FailingRepository,
+    )
+
+    with session_factory() as session:
+        with pytest.raises(
+            KnowledgeFileUploadError,
+            match="Unable to persist uploaded knowledge file metadata.",
+        ):
+            upload_service.upload_file(
+                session,
+                filename="company-profile.md",
+                content_type="text/markdown",
+                file_bytes=b"# Company\n",
+            )
+
+    assert [method for method, _path, _body in requests] == ["POST", "DELETE"]
+    assert requests[1][1] == "/storage/v1/object/knowledge-files"
+    assert json.loads(requests[1][2].decode("utf-8"))["prefixes"][0].endswith(
+        "/company-profile.md"
+    )
+
+
 def test_storage_factory_returns_minio_storage_when_configured(tmp_path: Path) -> None:
     settings = build_test_settings(tmp_path, storage_provider="minio")
 
@@ -302,6 +371,145 @@ def test_storage_factory_returns_local_storage_when_configured(tmp_path: Path) -
     storage = create_knowledge_file_storage(settings)
 
     assert isinstance(storage, LocalKnowledgeFileStorage)
+
+
+def test_storage_factory_returns_supabase_storage_when_configured(tmp_path: Path) -> None:
+    settings = build_test_settings(tmp_path, storage_provider="supabase")
+
+    storage = create_knowledge_file_storage(settings)
+
+    assert isinstance(storage, SupabaseKnowledgeFileStorage)
+
+
+def test_storage_factory_rejects_missing_supabase_config(tmp_path: Path) -> None:
+    settings = build_test_settings(
+        tmp_path,
+        storage_provider="supabase",
+        supabase_url=None,
+    )
+
+    with pytest.raises(ValueError, match="SUPABASE_URL is required when STORAGE_PROVIDER=supabase."):
+        create_knowledge_file_storage(settings)
+
+
+def test_supabase_storage_upload_uses_expected_bucket_and_path(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers["Content-Type"]
+        captured["authorization"] = request.headers["Authorization"]
+        captured["api_key"] = request.headers["apiKey"]
+        captured["body"] = request.read()
+        return httpx.Response(200, json={"Key": "uploaded/company-profile.md"})
+
+    storage = SupabaseKnowledgeFileStorage(
+        url="https://project.supabase.co",
+        service_role_key="service-role",
+        bucket="knowledge-files",
+        http_client=build_supabase_http_client(handler),
+    )
+
+    stored_file = storage.upload_file(
+        file_bytes=b"# Company\n",
+        storage_path="uploaded/company-profile.md",
+        content_type="text/markdown",
+    )
+
+    assert stored_file.provider == "supabase"
+    assert stored_file.bucket == "knowledge-files"
+    assert stored_file.path == "uploaded/company-profile.md"
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/storage/v1/object/knowledge-files/uploaded/company-profile.md"
+    assert captured["authorization"] == "Bearer service-role"
+    assert captured["api_key"] == "service-role"
+    assert "multipart/form-data" in str(captured["content_type"])
+    assert b'filename="company-profile.md"' in captured["body"]
+    assert b"# Company\n" in captured["body"]
+
+
+def test_supabase_storage_download_returns_file_bytes() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(200, content=b"# Company\n")
+
+    storage = SupabaseKnowledgeFileStorage(
+        url="https://project.supabase.co",
+        service_role_key="service-role",
+        bucket="knowledge-files",
+        http_client=build_supabase_http_client(handler),
+    )
+
+    downloaded = storage.download_file(storage_path="uploaded/company-profile.md")
+
+    assert downloaded == b"# Company\n"
+    assert captured == {
+        "method": "GET",
+        "path": "/storage/v1/object/knowledge-files/uploaded/company-profile.md",
+    }
+
+
+def test_supabase_storage_delete_removes_expected_object() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["json"] = json.loads(request.read().decode("utf-8"))
+        return httpx.Response(200, json=[{"name": "uploaded/company-profile.md"}])
+
+    storage = SupabaseKnowledgeFileStorage(
+        url="https://project.supabase.co",
+        service_role_key="service-role",
+        bucket="knowledge-files",
+        http_client=build_supabase_http_client(handler),
+    )
+
+    storage.delete_file(storage_path="uploaded/company-profile.md")
+
+    assert captured == {
+        "method": "DELETE",
+        "path": "/storage/v1/object/knowledge-files",
+        "json": {"prefixes": ["uploaded/company-profile.md"]},
+    }
+
+
+def test_knowledge_file_upload_persists_supabase_metadata(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        request.read()
+        return httpx.Response(200, json={"Key": "ignored"})
+
+    settings = build_test_settings(tmp_path, storage_provider="supabase")
+    session_factory = build_session_factory(tmp_path)
+    upload_service = KnowledgeFileUploadService(
+        settings=settings,
+        storage=SupabaseKnowledgeFileStorage(
+            url=settings.supabase_url or "",
+            service_role_key=settings.supabase_service_role_key or "",
+            bucket=settings.supabase_storage_bucket or "",
+            http_client=build_supabase_http_client(handler),
+        ),
+    )
+
+    app.dependency_overrides[get_app_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = make_db_session_override(session_factory)
+    app.dependency_overrides[get_knowledge_file_upload_service] = lambda: upload_service
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/knowledge/files",
+        files={"file": ("company-profile.md", b"# Company\n", "text/markdown")},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["storage_provider"] == "supabase"
+    assert payload["storage_bucket"] == "knowledge-files"
+    assert payload["storage_path"].endswith("/company-profile.md")
 
 
 def test_minio_storage_round_trip_when_enabled() -> None:

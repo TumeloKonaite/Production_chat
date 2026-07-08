@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import PurePath
 
 from app.infrastructure.storage import KnowledgeFileStorage, StorageError
@@ -15,13 +15,21 @@ _SUPPORTED_EXTENSIONS = frozenset({".md", ".txt"})
 
 
 class UploadedKnowledgeFileLoader:
-    def __init__(self, *, storage: KnowledgeFileStorage) -> None:
+    def __init__(self, *, storage: KnowledgeFileStorage, storage_provider: str) -> None:
         self._storage = storage
+        self._storage_provider = storage_provider.casefold()
 
     def load_file(self, knowledge_file: KnowledgeFile) -> SourceDocument:
         extension = PurePath(knowledge_file.original_filename).suffix.casefold()
         if extension not in _SUPPORTED_EXTENSIONS:
             raise KnowledgeIngestionValidationError("Only .md and .txt files are supported.")
+        stored_provider = knowledge_file.storage_provider.casefold()
+        if stored_provider != self._storage_provider:
+            raise KnowledgeIngestionServiceError(
+                "File was uploaded with "
+                f"storage_provider={knowledge_file.storage_provider}, but current "
+                f"STORAGE_PROVIDER={self._storage_provider}."
+            )
 
         try:
             file_bytes = self._storage.download_file(storage_path=knowledge_file.storage_path)

@@ -169,6 +169,15 @@ DAGSHUB_TOKEN=
 
 For production Postgres, the app always uses `DATABASE_URL` for runtime traffic. Alembic and other maintenance jobs prefer `DATABASE_DIRECT_URL` and fall back to `DATABASE_URL` when no direct connection is configured.
 
+Uploaded knowledge files use a separate storage provider setting from the vector store:
+
+```env
+VECTOR_STORE_PROVIDER=supabase_pgvector
+STORAGE_PROVIDER=supabase
+```
+
+`VECTOR_STORE_PROVIDER` controls where chunks and embeddings are persisted. `STORAGE_PROVIDER` controls where uploaded source files are stored and later reloaded for ingestion.
+
 ## Local setup
 
 Install dependencies:
@@ -428,6 +437,30 @@ For a clean rebuild:
 2. If the vector dimension changed, update `KNOWLEDGE_EMBEDDING_DIMENSION` and let the migration recreate the pgvector storage shape.
 3. Re-run `uv run python .\scripts\ingest_knowledge.py`.
 4. Validate retrieval with a targeted smoke query or the opt-in Postgres integration test.
+
+### Uploaded file storage providers
+
+Local development can keep uploaded files in MinIO or the local filesystem:
+
+```env
+STORAGE_PROVIDER=minio
+MINIO_ENDPOINT=http://localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=knowledge-files
+MINIO_SECURE=false
+```
+
+Production can store uploaded files in Supabase Storage:
+
+```env
+STORAGE_PROVIDER=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_STORAGE_BUCKET=knowledge-files
+```
+
+When `STORAGE_PROVIDER=supabase`, uploaded file metadata is still stored in `knowledge_files`, including the provider, bucket, and object path used for ingestion. Keep the Supabase service role key on the backend only.
 
 ### Run ingestion from the CLI
 

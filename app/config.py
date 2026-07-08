@@ -25,7 +25,7 @@ SUPPORTED_LLM_PROVIDERS = frozenset({"openai", "openrouter"})
 SUPPORTED_RETRIEVER_TYPES = frozenset({"vector", "keyword", "hybrid"})
 SUPPORTED_RERANKER_TYPES = frozenset({"none", "llm"})
 SUPPORTED_RESPONSE_CACHE_PROVIDERS = frozenset({"redis"})
-SUPPORTED_STORAGE_PROVIDERS = frozenset({"local", "minio"})
+SUPPORTED_STORAGE_PROVIDERS = frozenset({"local", "minio", "supabase"})
 SUPPORTED_VECTOR_STORE_PROVIDERS = frozenset({"pgvector", "supabase_pgvector"})
 
 
@@ -77,7 +77,7 @@ class Settings:
     knowledge_upload_max_bytes: int = 10485760
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
-    supabase_storage_bucket: str | None = None
+    supabase_storage_bucket: str | None = "knowledge-files"
     mlflow_tracking_username: str | None = None
     mlflow_tracking_password: str | None = None
     llm_provider: str = "openai"
@@ -442,6 +442,12 @@ def get_settings() -> Settings:
         raise ValueError(
             "SUPABASE_SERVICE_ROLE_KEY is required when VECTOR_STORE_PROVIDER=supabase_pgvector."
         )
+    if storage_provider == "supabase" and supabase_url is None:
+        raise ValueError("SUPABASE_URL is required when STORAGE_PROVIDER=supabase.")
+    if storage_provider == "supabase" and supabase_service_role_key is None:
+        raise ValueError(
+            "SUPABASE_SERVICE_ROLE_KEY is required when STORAGE_PROVIDER=supabase."
+        )
 
     enable_langfuse_observability = _parse_bool(
         _get_first_env("ENABLE_LANGFUSE", "ENABLE_LANGFUSE_OBSERVABILITY"),
@@ -617,7 +623,10 @@ def get_settings() -> Settings:
         ),
         supabase_url=supabase_url,
         supabase_service_role_key=supabase_service_role_key,
-        supabase_storage_bucket=_get_non_empty_env("SUPABASE_STORAGE_BUCKET"),
+        supabase_storage_bucket=(
+            _get_non_empty_env("SUPABASE_STORAGE_BUCKET", default="knowledge-files")
+            or "knowledge-files"
+        ),
         enable_mlflow_tracking=_parse_bool(
             os.getenv("ENABLE_MLFLOW_TRACKING"),
             default=False,
