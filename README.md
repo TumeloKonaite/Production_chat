@@ -700,7 +700,7 @@ If a model config ID is unknown, the backend fails with a clear validation error
 
 ### Langfuse observability
 
-Langfuse is optional request-level observability for chat, retrieval, and LLM execution. It stays disabled by default and complements, rather than replaces, MLflow or DagsHub experiment tracking.
+Langfuse is optional request-level observability for live chat, retrieval, and LLM execution. It stays disabled by default and complements, rather than replaces, MLflow or DagsHub experiment tracking.
 
 Set:
 
@@ -722,6 +722,9 @@ LANGFUSE_EXPORT_DEFAULT_LIMIT=100
 - Internal `chat_traces.id` remains the primary application trace key. When Langfuse exposes a provider trace ID, it is also stored on the internal trace as optional `external_trace_id` metadata and propagated as `langfuse_trace_id` for feedback/export workflows.
 - To find a production request in Langfuse Cloud, search the trace list for the stored `external_trace_id` / `langfuse_trace_id` or start from the internal `chat_traces` row and follow that provider ID.
 - Keep MLflow and DagsHub enabled separately for experiment runs, metrics, and eval comparisons.
+- `/chat` does not initialize MLflow or DagsHub.
+- FastAPI startup does not initialize MLflow or DagsHub.
+- Eval runners, experiment scripts, matrix jobs, and API-triggered eval jobs are the allowed tracking boundary.
 
 ### Exporting bad Langfuse traces into eval review queues
 
@@ -743,30 +746,32 @@ The exporter writes a review dataset with empty expected fields by default so ma
 
 Detailed workflow notes live in `docs/evals/langfuse_trace_export.md`.
 
-### Local-only MLflow tracking
+### Running evals without tracking
+
+Set:
+
+```env
+ENABLE_MLFLOW_TRACKING=false
+ENABLE_DAGSHUB_TRACKING=false
+```
+
+All eval and experiment workflows still write local artifacts under `evals/results/` or `evals/outputs/`. Tracking failures and disabled tracking do not block `/chat`.
+
+### Local MLflow tracking
 
 Set:
 
 ```env
 ENABLE_MLFLOW_TRACKING=true
 ENABLE_DAGSHUB_TRACKING=false
-MLFLOW_TRACKING_URI=
+MLFLOW_TRACKING_URI=http://localhost:5000
 MLFLOW_EXPERIMENT_NAME=personal-chatbot-model-comparison
 ```
 
-When `MLFLOW_TRACKING_URI` is blank and DagsHub is disabled, MLflow falls back to a local file-backed store.
-That local mode is optional and legacy for this repo. If you use it, MLflow will recreate local runtime output directories as needed.
-
-If you prefer a local MLflow server and UI instead of the default file-backed store, start one first:
+Start a local MLflow server and UI first:
 
 ```bash
 mlflow server --host 0.0.0.0 --port 5000
-```
-
-Then point the eval runners at it:
-
-```env
-MLFLOW_TRACKING_URI=http://localhost:5000
 ```
 
 ### DagsHub-backed remote tracking
@@ -791,6 +796,7 @@ Authentication can be provided either with `DAGSHUB_TOKEN` in `.env` or with a p
 
 When `ENABLE_MLFLOW_TRACKING=true`, the eval runners reuse the shared MLflow/DagsHub tracker in `app/infrastructure/tracking/`.
 With DagsHub enabled, run metadata is logged to the remote backend while eval result files remain available under `evals/results/`.
+This repo keeps `mlflow` and `dagshub` in the main dependency set; tracking still fails open at runtime when disabled, unavailable, or misconfigured.
 
 Workflows that log to MLflow/DagsHub when tracking is enabled:
 
@@ -798,36 +804,70 @@ Workflows that log to MLflow/DagsHub when tracking is enabled:
 - `evals/runners/run_rag_eval.py`
 - `evals/runners/run_retrieval_eval.py`
 - `evals/runners/run_retrieval_sweep.py`
+- `evals/matrix/runner.py`
+- `evals/runners/run_model_eval.py`
+- `app/services/evals/eval_job_runner.py`
 - `scripts/run_chunking_experiment.py`
 - `scripts/run_embedding_experiment.py`
+- `scripts/compare_prompts.py`
 
 Core tracked params are standardized where they apply:
 
+- `workflow`
+- `experiment_family`
+- `dataset_name`
+- `dataset_version`
+- `git_sha`
+- `embedding_provider`
 - `embedding_model`
+- `vector_store_provider`
 - `chunk_size`
 - `chunk_overlap`
 - `retriever_type`
 - `top_k`
-- `query_rewriting`
-- `reranker`
+- `query_rewriting_enabled`
+- `query_rewrite_model`
+- `reranker_enabled`
+- `reranker_model`
+- `llm_provider`
 - `llm_model`
+- `llm_base_url`
 - `prompt_version`
+- `prompt_template_id`
+- `prompt_template_path`
+- `max_tokens`
 
 Core tracked metrics are standardized where they apply:
 
-- `recall_at_k`
-- `precision_at_k`
-- `mrr`
-- `faithfulness`
-- `answer_relevance`
-- `latency`
-- `cost`
+- `retrieval.recall_at_k`
+- `retrieval.precision_at_k`
+- `retrieval.mrr`
+- `retrieval.hit_rate`
+- `retrieval.avg_latency_ms`
+- `retrieval.p95_latency_ms`
+- `generation.quality_score`
+- `generation.groundedness_score`
+- `generation.faithfulness_score`
+- `generation.relevance_score`
+- `generation.avg_latency_ms`
+- `generation.p95_latency_ms`
+- `generation.prompt_tokens`
+- `generation.completion_tokens`
+- `generation.total_tokens`
+- `generation.estimated_cost_usd`
+- `rag.answer_quality`
+- `rag.retrieval_relevance`
+- `rag.groundedness`
+- `rag.end_to_end_latency_ms`
+- `rag.estimated_cost_usd`
 
 Local comparison workflows keep inspectable artifacts alongside MLflow:
 
 - summary CSV and JSON
 - ranked comparison markdown table
 - per-run detailed result artifacts
+- config and manifest JSON files
+- prompt template copies where applicable
 
 Use local artifacts for quick inspection under `evals/results/`, and use MLflow or DagsHub to compare the same runs remotely by the standardized params and metrics above.
 

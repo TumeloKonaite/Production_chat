@@ -15,6 +15,14 @@ if str(ROOT_DIR) not in sys.path:
 from app.config import get_settings
 from app.infrastructure.llm import JudgeClient
 from app.infrastructure.prompts import PromptLoader
+from app.infrastructure.tracking.conventions import (
+    build_generation_tracking_params,
+    build_rag_tracking_metrics,
+    build_retrieval_tracking_params,
+    extract_model_provider,
+    get_git_sha,
+    resolve_prompt_template_path,
+)
 from app.infrastructure.tracking import create_experiment_tracker
 from app.repositories import EvalRepository
 from app.repositories.db.session import get_session_factory
@@ -38,6 +46,7 @@ class RagEvalRunResult:
     judge_model_config_id: str | None
     top_k: int
     temperature: float
+    max_tokens: int | None
     retrieval_config: dict[str, object]
     summary: object
     results: list[object]
@@ -99,6 +108,12 @@ def parse_args() -> argparse.Namespace:
         help="Sampling temperature for answer generation.",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Optional max_tokens override passed to the answer-generation model client.",
+    )
+    parser.add_argument(
         "--experiment-name",
         default=None,
         help="Override the MLflow experiment name used for this evaluation run.",
@@ -125,6 +140,7 @@ async def main() -> None:
             run_name=args.run_name,
             judge_prompt_path=args.judge_prompt.resolve(),
             temperature=args.temperature,
+            max_tokens=args.max_tokens,
             experiment_name=args.experiment_name,
             persist_results=not args.no_db,
         )
@@ -147,6 +163,7 @@ async def run_rag_eval(
     run_name: str,
     judge_prompt_path: Path,
     temperature: float = 0.2,
+    max_tokens: int | None = None,
     experiment_name: str | None = None,
     persist_results: bool = True,
     tracker=None,
@@ -154,6 +171,10 @@ async def run_rag_eval(
 ) -> RagEvalRunResult:
     resolved_top_k = top_k if top_k is not None else settings.retrieval_top_k
     prompt_loader = PromptLoader(prompts_dir=DEFAULT_PROMPTS_DIR)
+    prompt_template_path = resolve_prompt_template_path(
+        prompts_dir=DEFAULT_PROMPTS_DIR,
+        prompt_version=prompt_version,
+    )
     llm_service = LLMService(settings=settings)
     retrieval_service = RetrievalService(settings=settings)
     judge_client = JudgeClient(settings=settings)
@@ -217,6 +238,7 @@ async def run_rag_eval(
             retrieval_config=retrieval_config,
             judge_prompt_template=judge_prompt_template,
             temperature=temperature,
+            max_tokens=max_tokens,
             persist_results=persist_results,
         )
 
@@ -236,6 +258,15 @@ async def run_rag_eval(
         summary_path = output_dir / f"{run_name}_{timestamp}.md"
         summary_path.write_text(summary_table, encoding="utf-8")
         config_path = output_dir / f"{run_name}_{timestamp}_config.json"
+        prompt_artifact_path: Path | None = None
+        if prompt_template_path is not None:
+            prompt_artifact_path = output_dir / f"{run_name}_{timestamp}_prompt.md"
+            prompt_artifact_path.write_text(
+                prompt_template_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        judge_prompt_artifact_path = output_dir / f"{run_name}_{timestamp}_judge_prompt.md"
+        judge_prompt_artifact_path.write_text(judge_prompt_template, encoding="utf-8")
         config_path.write_text(
             json.dumps(
                 {
@@ -243,11 +274,14 @@ async def run_rag_eval(
                     "model_config_id": model_config_id,
                     "judge_model_config_id": judge_model_config_id,
                     "prompt_version": prompt_version,
+                    "prompt_template_path": str(prompt_template_path) if prompt_template_path else None,
                     "top_k": resolved_top_k,
                     "judge_prompt_path": str(judge_prompt_path),
                     "temperature": temperature,
+                    "max_tokens": max_tokens,
                     "retrieval_config": retrieval_config,
                     "persist_results": persist_results,
+                    "git_sha": get_git_sha(),
                     "python_command_used": " ".join(argv or []),
                 },
                 indent=2,
@@ -259,80 +293,50 @@ async def run_rag_eval(
 
         if experiment_tracker.enabled:
             with experiment_tracker.run(run_name):
-                experiment_tracker.log_params(
-                    {
-                        "run_name": run_name,
-                        "dataset_name": dataset_path.name,
-                        "dataset_path": str(dataset_path),
-                        "llm_model": model_config_id,
-                        "model_config_id": model_config_id,
-                        "model_name": summary.model_name,
-                        "judge_model_config_id": judge_model_config_id,
-                        "prompt_version": prompt_version,
-                        "judge_prompt_path": str(judge_prompt_path),
-                        "retrieval_config": retrieval_config,
-                        "temperature": temperature,
-                        "top_k": resolved_top_k,
-                        "query_rewriting": settings.enable_query_rewriting,
-                        "retriever_type": settings.retriever_type,
-                        "reranker": settings.reranker_type if settings.enable_reranking else "none",
-                        "chunk_size": settings.knowledge_chunk_size,
-                        "chunk_overlap": settings.knowledge_chunk_overlap,
-                        "min_similarity": settings.retrieval_min_similarity,
-                        "embedding_provider": settings.embedding_provider,
-                        "embedding_model": settings.knowledge_embedding_model,
-                        "embedding_dimension": settings.embedding_dimension,
-                        "knowledge_collection_name": settings.knowledge_collection_name,
-                        "reranker_enabled": settings.enable_reranking,
-                        "reranker_type": settings.reranker_type if settings.enable_reranking else "none",
-                        "reranker_model": settings.reranker_model if settings.enable_reranking else None,
-                        "reranker_initial_top_k": (
-                            settings.reranker_initial_top_k if settings.enable_reranking else None
-                        ),
-                        "reranker_final_top_k": resolved_top_k,
+                params = build_retrieval_tracking_params(
+                    workflow="rag_eval",
+                    experiment_family="rag_eval",
+                    run_name=run_name,
+                    settings=settings,
+                    dataset_path=dataset_path,
+                    top_k=resolved_top_k,
+                    chunk_size=settings.knowledge_chunk_size,
+                    chunk_overlap=settings.knowledge_chunk_overlap,
+                    git_sha=get_git_sha(),
+                    extra={
                         "persisted_to_db": persist_results,
-                    }
+                        "judge_prompt_path": str(judge_prompt_path),
+                    },
                 )
-                experiment_tracker.log_metrics(
-                    {
-                        "total_questions": summary.total_questions,
-                        "precision_at_k": summary.avg_precision_at_k,
-                        "recall_at_k": summary.avg_recall_at_k,
-                        "mrr": summary.avg_mrr,
-                        "faithfulness": summary.avg_faithfulness,
-                        "answer_relevance": summary.avg_answer_relevance,
-                        "latency": summary.latency_ms_avg,
-                        "cost": (
-                            summary.estimated_total_cost_usd
-                            if summary.estimated_total_cost_usd is not None
-                            else 0.0
-                        ),
-                        "avg_precision_at_k": summary.avg_precision_at_k,
-                        "avg_recall_at_k": summary.avg_recall_at_k,
-                        "avg_mrr": summary.avg_mrr,
-                        "avg_ndcg_at_k": summary.avg_ndcg_at_k,
-                        "avg_context_relevance": summary.avg_context_relevance,
-                        "avg_faithfulness": summary.avg_faithfulness,
-                        "avg_answer_relevance": summary.avg_answer_relevance,
-                        "latency_ms_avg": summary.latency_ms_avg,
-                        "latency_ms_p50": summary.latency_ms_p50,
-                        "latency_ms_p95": summary.latency_ms_p95,
-                        "estimated_total_cost_usd": (
-                            summary.estimated_total_cost_usd
-                            if summary.estimated_total_cost_usd is not None
-                            else 0.0
-                        ),
-                        "average_cost_per_question_usd": (
-                            summary.average_cost_per_question_usd
-                            if summary.average_cost_per_question_usd is not None
-                            else 0.0
-                        ),
-                        "questions_with_cost_estimate": summary.questions_with_cost_estimate,
-                    }
+                params.update(
+                    build_generation_tracking_params(
+                        workflow="rag_eval",
+                        experiment_family="rag_eval",
+                        run_name=run_name,
+                        dataset_path=dataset_path,
+                        dataset_version=dataset_path.stem,
+                        prompt_version=prompt_version,
+                        prompt_template_path=prompt_template_path,
+                        model_config_id=summary.model_config_id,
+                        llm_provider=extract_model_provider(summary.model_config_id),
+                        llm_model=summary.model_name,
+                        llm_base_url=llm_service.get_model_base_url(summary.model_config_id),
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        git_sha=get_git_sha(),
+                        judge_model_config_id=judge_model_config_id,
+                        retrieval_config=str(retrieval_config.get("name", "default")),
+                        context_top_k=resolved_top_k,
+                    )
                 )
+                experiment_tracker.log_params(params)
+                experiment_tracker.log_metrics(build_rag_tracking_metrics(summary))
                 experiment_tracker.log_artifact(result_path)
                 experiment_tracker.log_artifact(summary_path)
                 experiment_tracker.log_artifact(config_path)
+                experiment_tracker.log_artifact(judge_prompt_artifact_path)
+                if prompt_artifact_path is not None:
+                    experiment_tracker.log_artifact(prompt_artifact_path)
 
         return RagEvalRunResult(
             run_name=run_name,
@@ -342,6 +346,7 @@ async def run_rag_eval(
             judge_model_config_id=judge_model_config_id,
             top_k=resolved_top_k,
             temperature=temperature,
+            max_tokens=max_tokens,
             retrieval_config=retrieval_config,
             summary=summary,
             results=list(results),
@@ -349,6 +354,8 @@ async def run_rag_eval(
                 "results_json": result_path,
                 "summary_md": summary_path,
                 "config_json": config_path,
+                "judge_prompt_md": judge_prompt_artifact_path,
+                **({"prompt_template_md": prompt_artifact_path} if prompt_artifact_path else {}),
             },
         )
     finally:

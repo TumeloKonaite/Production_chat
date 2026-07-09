@@ -16,6 +16,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.config import get_settings
 from app.infrastructure.prompts import PromptLoader
+from app.infrastructure.tracking.conventions import (
+    build_generation_tracking_metrics,
+    build_generation_tracking_params,
+    get_git_sha,
+    resolve_prompt_template_path,
+)
 from app.infrastructure.tracking import create_experiment_tracker
 from app.services.chat.prompting import (
     build_chat_system_prompt,
@@ -387,6 +393,10 @@ async def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     for prompt_version in prompt_versions:
+        prompt_template_path = resolve_prompt_template_path(
+            prompts_dir=DEFAULT_PROMPTS_DIR,
+            prompt_version=prompt_version,
+        )
         results = await evaluate_prompt_version(
             prompt_version=prompt_version,
             questions=questions,
@@ -402,6 +412,13 @@ async def main() -> None:
         version_output_dir.mkdir(parents=True, exist_ok=True)
         responses_path = version_output_dir / "generated_responses.jsonl"
         summary_path = version_output_dir / "comparison_summary.md"
+        prompt_artifact_path: Path | None = None
+        if prompt_template_path is not None:
+            prompt_artifact_path = version_output_dir / "prompt_template.md"
+            prompt_artifact_path.write_text(
+                prompt_template_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
         write_jsonl(responses_path, results)
         write_summary(
             summary_path,
@@ -415,17 +432,53 @@ async def main() -> None:
 
         with tracker.run(prompt_version):
             tracker.log_params(
-                {
-                    "prompt_version": prompt_version,
-                    "model": llm_service.model,
-                    "temperature": args.temperature,
-                    "retrieval_top_k": retrieval_top_k,
-                    "eval_dataset": str(args.dataset),
-                }
+                build_generation_tracking_params(
+                    workflow="prompt_comparison",
+                    experiment_family="prompt_comparison",
+                    run_name=prompt_version,
+                    dataset_path=args.dataset,
+                    dataset_version=args.dataset.stem,
+                    prompt_version=prompt_version,
+                    prompt_template_path=prompt_template_path,
+                    model_config_id=llm_service.default_model_config_id,
+                    llm_provider=None,
+                    llm_model=llm_service.model,
+                    llm_base_url=None,
+                    temperature=args.temperature,
+                    max_tokens=None,
+                    git_sha=get_git_sha(),
+                    context_top_k=retrieval_top_k,
+                    extra={
+                        "prompt_candidate_name": prompt_version,
+                        "retrieval_config": settings.default_retrieval_config,
+                    },
+                )
             )
-            tracker.log_metrics(metrics)
+            tracker.log_metrics(
+                build_generation_tracking_metrics(
+                    quality_score=metrics.get("avg_answer_quality_score"),
+                    groundedness_score=metrics.get("avg_groundedness_score"),
+                    faithfulness_score=None,
+                    relevance_score=None,
+                    avg_latency_ms=metrics.get("avg_latency_ms"),
+                    p95_latency_ms=None,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    total_tokens=None,
+                    estimated_cost_usd=None,
+                    extra={
+                        "prompt.tone_score": float(metrics.get("avg_tone_score", 0.0)),
+                        "prompt.refusal_score": float(metrics.get("avg_refusal_score", 0.0)),
+                        "prompt.unsupported_claim_score": float(
+                            metrics.get("avg_unsupported_claim_score", 0.0)
+                        ),
+                    },
+                )
+            )
             tracker.log_artifact(responses_path)
             tracker.log_artifact(summary_path)
+            if prompt_artifact_path is not None:
+                tracker.log_artifact(prompt_artifact_path)
 
         print(
             f"{prompt_version}: groundedness={metrics['avg_groundedness_score']:.3f}, "

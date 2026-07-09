@@ -80,6 +80,7 @@ class LLMService:
         prompt_version: str,
         retrieval_config: str = "default",
         temperature: float | None = None,
+        max_tokens: int | None = None,
         model_config_id: str | None = None,
     ) -> LLMGeneratedResponse:
         model_config = self.get_model_config(model_config_id)
@@ -96,6 +97,7 @@ class LLMService:
             ],
             model=model_config.model,
             temperature=temperature,
+            max_tokens=max_tokens,
         )
         token_usage = TokenUsage(
             input_tokens=response.input_tokens,

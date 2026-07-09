@@ -223,7 +223,7 @@ def test_run_embedding_experiment_matrix_writes_ranked_results(
 
     monkeypatch.setattr(
         "scripts.run_embedding_experiment.get_session_factory",
-        lambda: (lambda: FakeSession()),
+        lambda *args, **kwargs: (lambda: FakeSession()),
     )
     monkeypatch.setattr(
         "scripts.run_embedding_experiment._get_database_vector_store_dimension",

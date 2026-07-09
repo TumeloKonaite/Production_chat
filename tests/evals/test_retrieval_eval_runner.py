@@ -207,6 +207,9 @@ def test_evaluate_examples_excludes_rows_without_expected_sources_from_aggregate
         "query_rewrite_total_completion_tokens": 0,
         "query_rewrite_total_tokens": 0,
         "query_rewrite_estimated_total_cost": 0.0,
+        "retrieval_total_latency_ms": 0,
+        "retrieval_avg_latency_ms": 0.0,
+        "retrieval_p95_latency_ms": 0.0,
         "context_relevance": None,
     }
     assert results[0]["original_query"] == "question 1"
@@ -375,6 +378,9 @@ def test_write_artifacts_persists_json_csv_and_config_outputs(tmp_path: Path) ->
         "query_rewrite_total_completion_tokens": 0,
         "query_rewrite_total_tokens": 0,
         "query_rewrite_estimated_total_cost": 0.0,
+        "retrieval_total_latency_ms": 0,
+        "retrieval_avg_latency_ms": 0.0,
+        "retrieval_p95_latency_ms": 0.0,
         "context_relevance": None,
     }
     results = [
@@ -460,6 +466,7 @@ def test_build_run_config_captures_retrieval_settings() -> None:
     assert config["embedding_dimension"] == 384
     assert config["retriever_type"] == "vector"
     assert config["vector_store_type"] == "pgvector"
+    assert config["vector_store_provider"] == "pgvector"
     assert config["retrieval_strategy"] == "vector"
     assert config["query_rewriting"] is True
     assert config["query_rewriting_enabled"] is True
@@ -539,61 +546,18 @@ def test_log_run_to_tracker_logs_summary_and_artifacts(tmp_path: Path) -> None:
 
     assert run_id == "mlflow-run-123"
     assert tracker.run_names == ["retrieval-hybrid-k5-2026-07-03_145252"]
-    assert tracker.params == [
-        {
-            "run_name": "retrieval-hybrid-k5-2026-07-03_145252",
-            "notes": "Triggered from API",
-            "dataset_name": "portfolio_eval_dataset.jsonl",
-            "dataset_path": "evals\\datasets\\portfolio_eval_dataset.jsonl",
-            "retriever_type": "hybrid",
-            "retrieval_config": "default",
-            "top_k": 5,
-            "embedding_provider": "hf",
-            "embedding_model": "all-MiniLM-L6-v2",
-            "embedding_dimension": 384,
-            "knowledge_collection_name": "personal_knowledge_base",
-            "chunk_size": 500,
-            "chunk_overlap": 100,
-            "retrieval_min_similarity": 0.55,
-            "git_commit_sha": "abc123",
-            "query_rewriting": True,
-            "query_rewriting_enabled": True,
-            "query_rewrite_model": "openai:gpt-4.1-mini",
-            "query_rewrite_temperature": 0.0,
-            "query_rewrite_prompt_version": "v1",
-            "query_rewrite_timeout_seconds": 10,
-            "query_rewrite_max_tokens": 128,
-            "reranker": "none",
-            "reranker_enabled": False,
-            "reranker_type": "none",
-            "reranker_model": None,
-            "reranker_initial_top_k": 5,
-            "reranker_final_top_k": 5,
-        }
-    ]
-    assert tracker.metrics == [
-        {
-            "num_queries_total": 2,
-            "num_queries_evaluated": 1,
-            "num_queries_without_expected_source": 1,
-            "num_queries_without_expected_sources": 1,
-            "hit_at_k": 1.0,
-            "recall_at_k": 1.0,
-            "precision_at_k": 0.5,
-            "mean_precision_at_k": 0.5,
-            "mrr": 1.0,
-            "query_rewrite_total_latency_ms": 0,
-            "query_rewrite_avg_latency_ms": 0.0,
-            "query_rewrite_success_count": 0,
-            "query_rewrite_fallback_count": 0,
-            "query_rewrite_failure_count": 0,
-            "query_rewrite_total_prompt_tokens": 0,
-            "query_rewrite_total_completion_tokens": 0,
-            "query_rewrite_total_tokens": 0,
-            "query_rewrite_estimated_total_cost": 0.0,
-            "context_relevance": 0.0,
-        }
-    ]
+    assert tracker.params[0]["workflow"] == "retrieval_eval"
+    assert tracker.params[0]["experiment_family"] == "retrieval_eval"
+    assert tracker.params[0]["notes"] == "Triggered from API"
+    assert tracker.params[0]["dataset_name"] == "portfolio_eval_dataset.jsonl"
+    assert tracker.params[0]["vector_store_provider"] == "pgvector"
+    assert tracker.params[0]["git_sha"] == "abc123"
+    assert tracker.params[0]["query_rewriting_enabled"] is None
+    assert tracker.params[0]["query_rewrite_model"] is None
+    assert tracker.metrics[0]["retrieval.recall_at_k"] == 1.0
+    assert tracker.metrics[0]["retrieval.precision_at_k"] == 0.5
+    assert tracker.metrics[0]["retrieval.mrr"] == 1.0
+    assert tracker.metrics[0]["query_rewrite.total_tokens"] == 0
     assert tracker.artifacts == list(artifact_paths.values())
 
 

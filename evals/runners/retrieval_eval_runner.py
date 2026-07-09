@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from time import perf_counter
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -17,6 +18,13 @@ if str(ROOT_DIR) not in sys.path:
 
 from app.config import Settings
 from app.infrastructure.llm import JudgeClient
+from app.infrastructure.tracking.conventions import (
+    build_retrieval_tracking_metrics,
+    build_retrieval_tracking_params,
+    get_git_sha,
+    percentile,
+    resolve_vector_store_provider,
+)
 from app.services.chat.prompting import format_retrieved_context
 from app.services.retrieval import RetrievalService
 from evals.runners.query_rewriter import (
@@ -202,6 +210,9 @@ def evaluate_examples(
         ],
         "query_rewrite_total_tokens": summary["query_rewrite_total_tokens"],
         "query_rewrite_estimated_total_cost": summary["query_rewrite_estimated_total_cost"],
+        "retrieval_total_latency_ms": summary["retrieval_total_latency_ms"],
+        "retrieval_avg_latency_ms": summary["retrieval_avg_latency_ms"],
+        "retrieval_p95_latency_ms": summary["retrieval_p95_latency_ms"],
         "context_relevance": summary["context_relevance"],
     }, per_query_results
 
@@ -231,6 +242,7 @@ def evaluate_examples_for_k_values(
     rewrite_total_tokens = 0
     rewrite_estimated_total_cost = 0.0
     context_relevance_scores: list[float] = []
+    retrieval_latencies_ms: list[int] = []
 
     for example in examples:
         rewrite_result = (
@@ -241,11 +253,14 @@ def evaluate_examples_for_k_values(
                 rewrite_context=example.rewrite_context,
             )
         )
+        retrieval_started_at = perf_counter()
         retrieval_result = _retrieve_with_diagnostics(
             retrieval_service=retrieval_service,
             query=rewrite_result.query_used_for_retrieval,
             top_k=max_k,
         )
+        retrieval_latency_ms = int((perf_counter() - retrieval_started_at) * 1000)
+        retrieval_latencies_ms.append(retrieval_latency_ms)
         retrieved_chunks = retrieval_result.final_chunks
         retrieved_sources = unique_ranked_sources([chunk.source for chunk in retrieved_chunks])
         retrieved_chunk_ids = [chunk.id for chunk in retrieved_chunks]
@@ -334,6 +349,7 @@ def evaluate_examples_for_k_values(
                 "query_rewrite_total_tokens": rewrite_result.query_rewrite_total_tokens,
                 "query_rewrite_estimated_cost": rewrite_result.query_rewrite_estimated_cost,
                 "query_rewrite_error": rewrite_result.query_rewrite_error,
+                "retrieval_latency_ms": retrieval_latency_ms,
                 "expected_source_documents": list(example.expected_source_documents),
                 "reranker_enabled": retrieval_result.reranker_enabled,
                 "reranker_type": retrieval_result.reranker_type,
@@ -384,6 +400,16 @@ def evaluate_examples_for_k_values(
         "query_rewrite_total_completion_tokens": rewrite_total_completion_tokens,
         "query_rewrite_total_tokens": rewrite_total_tokens,
         "query_rewrite_estimated_total_cost": round(rewrite_estimated_total_cost, 6),
+        "retrieval_total_latency_ms": sum(retrieval_latencies_ms),
+        "retrieval_avg_latency_ms": (
+            sum(retrieval_latencies_ms) / len(retrieval_latencies_ms)
+            if retrieval_latencies_ms
+            else 0.0
+        ),
+        "retrieval_p95_latency_ms": percentile(
+            sorted(float(latency) for latency in retrieval_latencies_ms),
+            percentile_value=0.95,
+        ),
         "context_relevance": _mean_or_none(context_relevance_scores),
         "metrics_by_k": {
             str(current_k): {
@@ -440,7 +466,8 @@ def build_run_config(
         "embedding_provider": settings.embedding_provider,
         "embedding_model": settings.knowledge_embedding_model,
         "embedding_dimension": settings.embedding_dimension,
-        "vector_store_type": "pgvector" if settings.retriever_type in {"vector", "hybrid"} else None,
+        "vector_store_provider": resolve_vector_store_provider(settings),
+        "vector_store_type": resolve_vector_store_provider(settings),
         "retrieval_strategy": settings.retriever_type,
         "query_rewriting": settings.enable_query_rewriting,
         "query_rewriting_enabled": settings.enable_query_rewriting,
@@ -468,10 +495,13 @@ def build_run_config(
             "reranker_final_top_k": top_k,
             "knowledge_collection_name": settings.knowledge_collection_name,
             "embedding_provider": settings.embedding_provider,
+            "embedding_model": settings.knowledge_embedding_model,
             "embedding_dimension": settings.embedding_dimension,
+            "vector_store_provider": resolve_vector_store_provider(settings),
             "vector_store_connection_scheme": settings.database_url.split(":", 1)[0],
         },
-        "git_commit_sha": _git_commit_sha(),
+        "git_sha": get_git_sha(ROOT_DIR),
+        "git_commit_sha": get_git_sha(ROOT_DIR),
         "python_command_used": subprocess.list2cmdline([sys.executable, *argv]),
     }
 
@@ -570,83 +600,28 @@ def log_run_to_tracker(
         return None
 
     with tracker.run(run_name) as run:
-        params = {
-            "run_name": run_name,
-            "notes": config.get("notes"),
-            "dataset_name": dataset_path.name,
-            "dataset_path": str(dataset_path),
-            "retriever_type": settings.retriever_type,
-            "retrieval_config": settings.default_retrieval_config,
-            "top_k": top_k,
-            "embedding_provider": settings.embedding_provider,
-            "embedding_model": settings.knowledge_embedding_model,
-            "embedding_dimension": settings.embedding_dimension,
-            "knowledge_collection_name": settings.knowledge_collection_name,
-            "chunk_size": config.get("chunk_size"),
-            "chunk_overlap": config.get("chunk_overlap"),
-            "retrieval_min_similarity": settings.retrieval_min_similarity,
-            "git_commit_sha": config.get("git_commit_sha"),
-            "query_rewriting": config.get("query_rewriting"),
-            "query_rewriting_enabled": config.get("query_rewriting_enabled"),
-            "query_rewrite_model": config.get("query_rewrite_model"),
-            "query_rewrite_temperature": config.get("query_rewrite_temperature"),
-            "query_rewrite_prompt_version": config.get("query_rewrite_prompt_version"),
-            "query_rewrite_timeout_seconds": config.get("query_rewrite_timeout_seconds"),
-            "query_rewrite_max_tokens": config.get("query_rewrite_max_tokens"),
-            "reranker": config.get("reranker"),
-            "reranker_enabled": config.get("reranker_enabled"),
-            "reranker_type": config.get("reranker_type"),
-            "reranker_model": config.get("reranker_model"),
-            "reranker_initial_top_k": config.get("reranker_initial_top_k"),
-            "reranker_final_top_k": config.get("reranker_final_top_k"),
-        }
+        params = build_retrieval_tracking_params(
+            workflow="retrieval_eval",
+            experiment_family="retrieval_eval",
+            run_name=run_name,
+            settings=settings,
+            dataset_path=dataset_path,
+            top_k=top_k,
+            chunk_size=config.get("chunk_size"),
+            chunk_overlap=config.get("chunk_overlap"),
+            git_sha=(
+                config.get("git_sha")
+                if isinstance(config.get("git_sha"), str)
+                else config.get("git_commit_sha")
+            ),
+            notes=config.get("notes") if isinstance(config.get("notes"), str) else None,
+        )
         feedback_tracking_params = config.get("feedback_tracking_params")
         if isinstance(feedback_tracking_params, dict):
             params.update(feedback_tracking_params)
         tracker.log_params(params)
 
-        metrics: dict[str, float | int] = {
-            "num_queries_total": summary["num_queries_total"],
-            "num_queries_evaluated": summary["num_queries_evaluated"],
-            "num_queries_without_expected_source": summary[
-                "num_queries_without_expected_source"
-            ],
-            "num_queries_without_expected_sources": summary[
-                "num_queries_without_expected_sources"
-            ],
-            "query_rewrite_total_latency_ms": summary.get("query_rewrite_total_latency_ms", 0),
-            "query_rewrite_avg_latency_ms": summary.get("query_rewrite_avg_latency_ms", 0.0),
-            "query_rewrite_success_count": summary.get("query_rewrite_success_count", 0),
-            "query_rewrite_fallback_count": summary.get("query_rewrite_fallback_count", 0),
-            "query_rewrite_failure_count": summary.get("query_rewrite_failure_count", 0),
-            "query_rewrite_total_prompt_tokens": summary.get(
-                "query_rewrite_total_prompt_tokens",
-                0,
-            ),
-            "query_rewrite_total_completion_tokens": summary.get(
-                "query_rewrite_total_completion_tokens",
-                0,
-            ),
-            "query_rewrite_total_tokens": summary.get("query_rewrite_total_tokens", 0),
-            "query_rewrite_estimated_total_cost": summary.get(
-                "query_rewrite_estimated_total_cost",
-                0.0,
-            ),
-            "context_relevance": (
-                summary["context_relevance"]
-                if summary.get("context_relevance") is not None
-                else 0.0
-            ),
-        }
-        for metric_name in ("hit_at_k", "recall_at_k", "mrr"):
-            metric_value = summary.get(metric_name)
-            if metric_value is not None:
-                metrics[metric_name] = metric_value
-        precision_at_k = summary.get("precision_at_k", summary.get("mean_precision_at_k"))
-        if precision_at_k is not None:
-            metrics["precision_at_k"] = precision_at_k
-        if summary.get("mean_precision_at_k") is not None:
-            metrics["mean_precision_at_k"] = summary["mean_precision_at_k"]
+        metrics = build_retrieval_tracking_metrics(summary)
         feedback_metrics = config.get("feedback_metrics")
         if isinstance(feedback_metrics, dict):
             metrics.update(feedback_metrics)
@@ -809,6 +784,7 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
         "query_rewrite_total_tokens",
         "query_rewrite_estimated_cost",
         "query_rewrite_error",
+        "retrieval_latency_ms",
         "expected_source_documents",
         "retrieved_sources",
         "retrieved_chunk_ids",
@@ -845,19 +821,7 @@ def _write_results_csv(path: Path, results: list[dict[str, Any]]) -> None:
 
 
 def _git_commit_sha() -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=ROOT_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-    sha = completed.stdout.strip()
-    return sha or None
+    return get_git_sha(ROOT_DIR)
 
 
 def _mean_or_none(values: list[float]) -> float | None:
