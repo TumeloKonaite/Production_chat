@@ -47,6 +47,7 @@ class ModelExperimentService:
         retrieval_config: str,
         retrieval_top_k: int,
         temperature: float,
+        max_tokens: int | None = None,
     ) -> ModelExperimentRun:
         model_config = self._llm_service.get_model_config(model_config_id)
         base_prompt = self._prompt_loader.load(prompt_version)
@@ -78,6 +79,7 @@ class ModelExperimentService:
                     prompt_version=prompt_version,
                     retrieval_config=retrieval_config,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                     model_config_id=model_config_id,
                 )
                 answer = response.message

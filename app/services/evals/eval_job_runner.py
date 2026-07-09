@@ -121,6 +121,7 @@ class EvalJobRunner:
                     judge_model_config_id=_resolve_judge_model_config_id(payload),
                     prompt_version=_resolve_prompt_version(settings, payload),
                     temperature=float(payload.get("temperature", 0.2)),
+                    max_tokens=_optional_int(payload.get("max_tokens")),
                     dataset_version=str(
                         payload.get("dataset_version") or "generation_eval_dataset_v1"
                     ),
@@ -142,7 +143,7 @@ class EvalJobRunner:
                         "prompt_version": result.prompt_version,
                         "temperature": result.temperature,
                         "dataset_version": result.dataset_version,
-                        "max_tokens": payload.get("max_tokens"),
+                        "max_tokens": result.max_tokens,
                     },
                 },
                 failures_payload={"run_id": run_id, "failures": []},
@@ -170,6 +171,7 @@ class EvalJobRunner:
                     run_name=run_id,
                     judge_prompt_path=DEFAULT_JUDGE_PROMPT_PATH.resolve(),
                     temperature=float(generation_payload.get("temperature", 0.2)),
+                    max_tokens=_optional_int(generation_payload.get("max_tokens")),
                     persist_results=False,
                     argv=["api:/api/evals/rag"],
                 )
@@ -188,6 +190,7 @@ class EvalJobRunner:
                         "judge_model_config_id": result.judge_model_config_id,
                         "prompt_version": result.prompt_version,
                         "temperature": result.temperature,
+                        "max_tokens": result.max_tokens,
                     },
                 },
                 failures_payload={"run_id": run_id, "failures": []},

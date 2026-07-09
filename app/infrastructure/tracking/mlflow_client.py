@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import logging
 from pathlib import Path
 from typing import Any
 
 from app.infrastructure.tracking.setup import TrackingSetupError, configure_tracking_backend
+
+logger = logging.getLogger(__name__)
 
 
 class MLflowClient:
@@ -56,8 +59,10 @@ class MLflowClient:
             )
             mlflow.set_experiment(experiment_name)
             return True
-        except TrackingSetupError:
-            raise
+        except TrackingSetupError as exc:
+            logger.warning("Experiment tracking disabled: %s", exc)
+            self._enabled = False
+            return False
         except Exception:
             self._enabled = False
             return False

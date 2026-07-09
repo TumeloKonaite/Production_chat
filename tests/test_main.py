@@ -85,3 +85,15 @@ def test_startup_logs_report_configuration_without_secrets(caplog) -> None:
     assert "supabase-secret" not in caplog.text
     assert "redis-secret" not in caplog.text
     assert "postgresql+psycopg://postgres:secret@db.example.com:5432/app" not in caplog.text
+
+
+def test_startup_does_not_initialize_experiment_tracking(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.infrastructure.tracking.setup.create_experiment_tracker",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tracking should not initialize")),
+    )
+
+    app = create_app(build_settings())
+
+    with TestClient(app):
+        pass

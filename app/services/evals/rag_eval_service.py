@@ -93,6 +93,7 @@ class RagEvalService:
         retrieval_config: dict[str, object],
         judge_prompt_template: str,
         temperature: float = 0.2,
+        max_tokens: int | None = None,
         persist_results: bool = True,
     ) -> tuple[RagEvalRunSummary, list[RagEvalQuestionResult]]:
         base_prompt = self._prompt_loader.load(prompt_version)
@@ -127,6 +128,7 @@ class RagEvalService:
                     prompt_version=prompt_version,
                     retrieval_config=str(retrieval_config.get("name", "default")),
                     temperature=temperature,
+                    max_tokens=max_tokens,
                     model_config_id=model_config_id,
                 )
                 answer = response.message

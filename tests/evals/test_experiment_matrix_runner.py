@@ -99,6 +99,7 @@ async def _fake_generation_runner(**kwargs) -> GenerationEvalRunResult:
         model_config_id="openai:gpt-4.1-mini",
         judge_model_config_id=kwargs["judge_model_config_id"],
         temperature=float(kwargs["temperature"]),
+        max_tokens=kwargs.get("max_tokens"),
         model_base_url="https://api.openai.com/v1",
         aggregate=aggregate,
         records=[record],

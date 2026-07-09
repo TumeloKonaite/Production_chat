@@ -99,9 +99,11 @@ def test_generation_eval_service_uses_fixed_context_dataset(tmp_path) -> None:
             examples=examples,
             prompt_version="v1_professional",
             judge_model_config_id="openai:gpt-4.1-mini",
+            max_tokens=512,
         )
     )
 
+    assert service._llm_service.calls[0]["max_tokens"] == 512
     assert len(run.records) == 1
     assert run.records[0].model_provider == "openrouter"
     assert run.records[0].model_base_url == "https://openrouter.ai/api/v1"

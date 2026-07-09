@@ -205,6 +205,7 @@ class GenerationEvalService:
         model_config_id: str | None = None,
         judge_model_config_id: str | None = None,
         temperature: float = 0.2,
+        max_tokens: int | None = None,
     ) -> GenerationEvalRun:
         model_config = self._llm_service.get_model_config(model_config_id)
         model_base_url = self._llm_service.get_model_base_url(model_config.config_id)
@@ -239,6 +240,7 @@ class GenerationEvalService:
                     prompt_version=prompt_version,
                     retrieval_config="fixed_context",
                     temperature=temperature,
+                    max_tokens=max_tokens,
                     model_config_id=model_config.config_id,
                 )
                 answer = response.message

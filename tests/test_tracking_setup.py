@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import Settings
-from app.infrastructure.tracking import TrackingSetupError, create_experiment_tracker
+from app.infrastructure.tracking import create_experiment_tracker
 from app.infrastructure.tracking.mlflow_client import MLflowClient
 
 
@@ -116,7 +116,7 @@ def test_mlflow_client_initializes_dagshub_before_setting_experiment(monkeypatch
     assert os.environ["DAGSHUB_USER_TOKEN"] == "dagshub-secret"
 
 
-def test_mlflow_client_raises_clear_error_when_dagshub_repo_owner_is_missing() -> None:
+def test_mlflow_client_disables_tracking_when_dagshub_repo_owner_is_missing() -> None:
     fake_mlflow = FakeMLflow()
     client = MLflowClient(
         tracking_uri=None,
@@ -129,11 +129,13 @@ def test_mlflow_client_raises_clear_error_when_dagshub_repo_owner_is_missing() -
     )
     client._mlflow = fake_mlflow
 
-    with pytest.raises(TrackingSetupError, match="DAGSHUB_REPO_OWNER"):
-        client.set_experiment("remote-evals")
+    configured = client.set_experiment("remote-evals")
+
+    assert configured is False
+    assert client.enabled is False
 
 
-def test_create_experiment_tracker_rejects_dagshub_without_mlflow() -> None:
+def test_create_experiment_tracker_disables_invalid_dagshub_without_mlflow() -> None:
     settings = build_test_settings(
         enable_mlflow_tracking=False,
         enable_dagshub_tracking=True,
@@ -141,5 +143,32 @@ def test_create_experiment_tracker_rejects_dagshub_without_mlflow() -> None:
         dagshub_repo_name="production-chatbot",
     )
 
-    with pytest.raises(TrackingSetupError, match="ENABLE_MLFLOW_TRACKING=true"):
-        create_experiment_tracker(settings, "remote-evals")
+    tracker = create_experiment_tracker(settings, "remote-evals")
+
+    assert tracker.enabled is False
+
+
+def test_mlflow_client_disables_tracking_when_dagshub_init_fails(monkeypatch) -> None:
+    fake_mlflow = FakeMLflow()
+
+    def fail_init(**kwargs: object) -> None:
+        del kwargs
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(sys.modules, "dagshub", SimpleNamespace(init=fail_init))
+
+    client = MLflowClient(
+        tracking_uri=None,
+        tracking_username=None,
+        tracking_password=None,
+        enabled=True,
+        enable_dagshub_tracking=True,
+        dagshub_repo_owner="acme",
+        dagshub_repo_name="production-chatbot",
+    )
+    client._mlflow = fake_mlflow
+
+    configured = client.set_experiment("remote-evals")
+
+    assert configured is False
+    assert client.enabled is False

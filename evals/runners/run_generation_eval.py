@@ -19,6 +19,12 @@ from app.infrastructure.llm import (
     fetch_openrouter_model_pricing,
 )
 from app.infrastructure.prompts import PromptLoader
+from app.infrastructure.tracking.conventions import (
+    build_generation_tracking_metrics,
+    build_generation_tracking_params,
+    get_git_sha,
+    resolve_prompt_template_path,
+)
 from app.infrastructure.tracking import create_experiment_tracker
 from app.services.evals.generation_eval_service import GenerationEvalService
 from app.services.llm import LLMConfigurationError, LLMServiceError
@@ -43,6 +49,7 @@ class GenerationEvalRunResult:
     model_config_id: str
     judge_model_config_id: str | None
     temperature: float
+    max_tokens: int | None
     model_base_url: str
     aggregate: object
     records: list[object]
@@ -86,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         help="Sampling temperature used for answer generation.",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Optional max_tokens override passed to the model client.",
+    )
+    parser.add_argument(
         "--experiment-name",
         default=None,
         help="Override the MLflow experiment name for this run.",
@@ -115,6 +128,7 @@ async def main() -> None:
             judge_model_config_id=args.judge_model,
             prompt_version=args.prompt_version,
             temperature=args.temperature,
+            max_tokens=args.max_tokens,
             experiment_name=args.experiment_name,
             dataset_version=args.dataset_version,
         )
@@ -146,6 +160,7 @@ async def run_generation_eval(
     judge_model_config_id: str | None = None,
     prompt_version: str | None = None,
     temperature: float = 0.2,
+    max_tokens: int | None = None,
     experiment_name: str | None = None,
     dataset_version: str = "generation_eval_dataset_v1",
     tracker=None,
@@ -154,6 +169,10 @@ async def run_generation_eval(
 ) -> GenerationEvalRunResult:
     resolved_prompt_version = prompt_version or settings.default_prompt_version
     prompt_loader = PromptLoader(prompts_dir=DEFAULT_PROMPTS_DIR)
+    prompt_template_path = resolve_prompt_template_path(
+        prompts_dir=DEFAULT_PROMPTS_DIR,
+        prompt_version=resolved_prompt_version,
+    )
     llm_service = LLMService(settings=settings)
     model_config = llm_service.get_model_config(model_config_id)
     resolved_settings, llm_service, pricing_lookup_note = await _apply_openrouter_pricing_if_missing(
@@ -186,6 +205,7 @@ async def run_generation_eval(
         model_config_id=model_config.config_id,
         judge_model_config_id=judge_model_config_id,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
     aggregate = run.aggregate
 
@@ -204,6 +224,10 @@ async def run_generation_eval(
     summary_path = output_dir / f"{resolved_run_name}.txt"
     summary_path.write_text(summary_text, encoding="utf-8")
     config_path = output_dir / f"{resolved_run_name}_config.json"
+    prompt_artifact_path: Path | None = None
+    if prompt_template_path is not None:
+        prompt_artifact_path = output_dir / f"{resolved_run_name}_prompt.md"
+        prompt_artifact_path.write_text(prompt_template_path.read_text(encoding="utf-8"), encoding="utf-8")
     feedback_dataset_summary = summarize_feedback_dataset(dataset_path)
     feedback_tracking_params: dict[str, object] | None = None
     extra_artifact_paths: dict[str, Path] = {}
@@ -223,9 +247,12 @@ async def run_generation_eval(
                 "dataset_path": str(dataset_path),
                 "dataset_version": dataset_version,
                 "prompt_version": resolved_prompt_version,
+                "prompt_template_path": str(prompt_template_path) if prompt_template_path else None,
                 "model_config_id": model_config.config_id,
                 "judge_model_config_id": judge_model_config_id,
                 "temperature": temperature,
+                "max_tokens": max_tokens,
+                "git_sha": get_git_sha(),
                 "python_command_used": " ".join(argv or []),
                 "feedback_tracking_params": feedback_tracking_params,
                 "feedback_metrics": aggregate.feedback_metrics,
@@ -239,66 +266,69 @@ async def run_generation_eval(
 
     if experiment_tracker.enabled:
         with experiment_tracker.run(resolved_run_name):
-            params = {
-                "dataset_path": str(dataset_path),
-                "dataset_version": dataset_version,
-                "prompt_version": resolved_prompt_version,
-                "query_rewriting": False,
-                "reranker": "none",
-                "llm_provider": aggregate.model_provider,
-                "llm_model": aggregate.model_name,
-                "llm_base_url": aggregate.model_base_url,
-                "model_config_id": aggregate.model_config_id,
-                "judge_model_config_id": judge_model_config_id,
-                "temperature": temperature,
-                "retrieval_mode": "fixed_context",
-                "retriever_type": "fixed_context",
-            }
+            params = build_generation_tracking_params(
+                workflow="generation_eval",
+                experiment_family="generation_eval",
+                run_name=resolved_run_name,
+                dataset_path=dataset_path,
+                dataset_version=dataset_version,
+                prompt_version=resolved_prompt_version,
+                prompt_template_path=prompt_template_path,
+                model_config_id=aggregate.model_config_id,
+                llm_provider=aggregate.model_provider,
+                llm_model=aggregate.model_name,
+                llm_base_url=aggregate.model_base_url,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                git_sha=get_git_sha(),
+                judge_model_config_id=judge_model_config_id,
+                retrieval_config="fixed_context",
+                context_top_k=None,
+                extra={
+                    "query_rewriting_enabled": False,
+                    "reranker_enabled": False,
+                    "retriever_type": "fixed_context",
+                },
+            )
             if feedback_tracking_params is not None:
                 params.update(feedback_tracking_params)
             experiment_tracker.log_params(params)
-            metrics: dict[str, float | int] = {
-                "total_examples": aggregate.total_examples,
-                "scored_examples": aggregate.scored_examples,
-                "skipped_examples": aggregate.skipped_examples,
-                "passed_examples": aggregate.passed_examples,
-                "failed_examples": aggregate.failed_examples,
-                "pass_rate": aggregate.pass_rate,
-                "latency": aggregate.latency_ms_avg,
-                "average_quality_score": aggregate.average_quality_score,
-                "average_groundedness_score": aggregate.average_groundedness_score,
-                "latency_ms_avg": aggregate.latency_ms_avg,
-                "latency_ms_p50": aggregate.latency_ms_p50,
-                "latency_ms_p95": aggregate.latency_ms_p95,
-                "total_prompt_tokens": aggregate.total_prompt_tokens,
-                "total_completion_tokens": aggregate.total_completion_tokens,
-                "total_tokens": aggregate.total_tokens,
-                "avg_tokens_per_response": aggregate.avg_tokens_per_response,
-                "responses_with_usage": aggregate.responses_with_usage,
-                "responses_with_cost_estimate": aggregate.responses_with_cost_estimate,
-            }
-            if aggregate.average_context_relevance is not None:
-                metrics["faithfulness"] = aggregate.average_faithfulness or 0.0
-                metrics["answer_relevance"] = aggregate.average_answer_relevance or 0.0
-                metrics["average_context_relevance"] = aggregate.average_context_relevance
-                metrics["average_faithfulness"] = aggregate.average_faithfulness or 0.0
-                metrics["average_answer_relevance"] = aggregate.average_answer_relevance or 0.0
-            if aggregate.estimated_prompt_cost_usd is not None:
-                metrics["cost"] = aggregate.estimated_total_cost_usd or 0.0
-                metrics["estimated_prompt_cost_usd"] = aggregate.estimated_prompt_cost_usd
-                metrics["estimated_completion_cost_usd"] = (
-                    aggregate.estimated_completion_cost_usd or 0.0
-                )
-                metrics["estimated_total_cost_usd"] = aggregate.estimated_total_cost_usd or 0.0
-                metrics["average_cost_per_response_usd"] = (
-                    aggregate.average_cost_per_response_usd or 0.0
-                )
+            metrics = build_generation_tracking_metrics(
+                quality_score=aggregate.average_quality_score,
+                groundedness_score=aggregate.average_groundedness_score,
+                faithfulness_score=aggregate.average_faithfulness,
+                relevance_score=aggregate.average_answer_relevance,
+                avg_latency_ms=aggregate.latency_ms_avg,
+                p95_latency_ms=aggregate.latency_ms_p95,
+                prompt_tokens=aggregate.total_prompt_tokens,
+                completion_tokens=aggregate.total_completion_tokens,
+                total_tokens=aggregate.total_tokens,
+                estimated_cost_usd=aggregate.estimated_total_cost_usd,
+                extra={
+                    "generation.total_examples": aggregate.total_examples,
+                    "generation.scored_examples": aggregate.scored_examples,
+                    "generation.skipped_examples": aggregate.skipped_examples,
+                    "generation.passed_examples": aggregate.passed_examples,
+                    "generation.failed_examples": aggregate.failed_examples,
+                    "generation.pass_rate": aggregate.pass_rate,
+                    "generation.responses_with_usage": aggregate.responses_with_usage,
+                    "generation.responses_with_cost_estimate": (
+                        aggregate.responses_with_cost_estimate
+                    ),
+                    "generation.avg_tokens_per_response": aggregate.avg_tokens_per_response,
+                    "generation.context_relevance_score": float(
+                        aggregate.average_context_relevance or 0.0
+                    ),
+                },
+            )
             if aggregate.feedback_metrics is not None:
                 metrics.update(aggregate.feedback_metrics)
             experiment_tracker.log_metrics(metrics)
             experiment_tracker.log_artifact(result_path)
             experiment_tracker.log_artifact(summary_path)
             experiment_tracker.log_artifact(config_path)
+            if prompt_artifact_path is not None:
+                experiment_tracker.log_artifact(prompt_artifact_path)
             for artifact_path in extra_artifact_paths.values():
                 experiment_tracker.log_artifact(artifact_path)
 
@@ -310,6 +340,7 @@ async def run_generation_eval(
         model_config_id=model_config.config_id,
         judge_model_config_id=judge_model_config_id,
         temperature=temperature,
+        max_tokens=max_tokens,
         model_base_url=model_base_url,
         aggregate=aggregate,
         records=list(run.records),
@@ -317,6 +348,7 @@ async def run_generation_eval(
             "results_json": result_path,
             "summary_txt": summary_path,
             "config_json": config_path,
+            **({"prompt_template_md": prompt_artifact_path} if prompt_artifact_path else {}),
             **extra_artifact_paths,
         },
         pricing_lookup_note=pricing_lookup_note,

@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from app.config import Settings
+from app.infrastructure.tracking.conventions import (
+    build_common_tracking_params,
+    build_generation_tracking_metrics,
+    build_retrieval_tracking_metrics,
+    get_git_sha,
+)
 from app.infrastructure.tracking import create_experiment_tracker
 from evals.matrix.expander import expand_suite_plan
 from evals.matrix.models import (
@@ -243,6 +249,66 @@ def run_experiment_matrix(
             "config_path": str(matrix_config.source_path),
         },
     )
+
+    if tracker.enabled:
+        with tracker.run(f"{suite.name}-summary-{resolved_matrix_run_id}"):
+            tracker.log_params(
+                build_common_tracking_params(
+                    workflow="experiment_matrix",
+                    experiment_family="experiment_matrix",
+                    run_name=f"{suite.name}-summary-{resolved_matrix_run_id}",
+                    git_sha=get_git_sha(),
+                    extra={
+                        "matrix_config_path": str(matrix_config.source_path),
+                        "suite_name": suite.name,
+                        "mode": suite.mode,
+                        "run_manifest_path": str(manifest_path),
+                        "total_planned_runs": plan.total_planned_runs,
+                        "successful_runs": len(ranked_rows),
+                        "failed_runs": len(failures),
+                    },
+                )
+            )
+            if ranked_rows:
+                best_row = ranked_rows[0]
+                if suite.mode == "generation":
+                    tracker.log_metrics(
+                        build_generation_tracking_metrics(
+                            quality_score=best_row.get("average_quality_score"),
+                            groundedness_score=best_row.get("average_groundedness_score"),
+                            faithfulness_score=best_row.get("average_faithfulness"),
+                            relevance_score=best_row.get("average_answer_relevance"),
+                            avg_latency_ms=best_row.get("latency_ms_avg"),
+                            p95_latency_ms=best_row.get("latency_ms_p95"),
+                            prompt_tokens=None,
+                            completion_tokens=None,
+                            total_tokens=None,
+                            estimated_cost_usd=best_row.get("estimated_total_cost_usd"),
+                            extra={"experiment.config_count": len(ranked_rows)},
+                        )
+                    )
+                else:
+                    tracker.log_metrics(
+                        build_retrieval_tracking_metrics(
+                            {
+                                "recall_at_k": best_row.get(
+                                    "recall_at_k",
+                                    best_row.get("avg_recall_at_k"),
+                                ),
+                                "precision_at_k": best_row.get(
+                                    "precision_at_k",
+                                    best_row.get("avg_precision_at_k"),
+                                ),
+                                "mrr": best_row.get("mrr", best_row.get("avg_mrr")),
+                                "hit_at_k": best_row.get("hit_at_k"),
+                            },
+                            extra={"experiment.config_count": len(ranked_rows)},
+                        )
+                    )
+            for artifact_path in summary_paths.values():
+                tracker.log_artifact(artifact_path)
+            tracker.log_artifact(failures_path)
+            tracker.log_artifact(manifest_path)
 
     return ExperimentMatrixRunResult(
         matrix_run_id=resolved_matrix_run_id,

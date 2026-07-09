@@ -1302,6 +1302,25 @@ def test_langfuse_failures_do_not_break_chat_response(tmp_path) -> None:
     assert len(fetch_chat_traces(session_factory)) == 1
 
 
+def test_chat_does_not_initialize_experiment_tracking(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.infrastructure.tracking.setup.create_experiment_tracker",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("tracking should not initialize")
+        ),
+    )
+    fake_llm = FakeLLMService(reply="Tracking remains isolated.")
+    client, session_factory, _ = build_test_client(tmp_path, fake_llm)
+
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work."})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Tracking remains isolated."
+    assert len(fetch_messages(session_factory)) == 2
+
+
 def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
     fake_llm = FakeLLMService()
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class TrackingSetupError(RuntimeError):
@@ -43,9 +46,18 @@ def create_experiment_tracker(settings: Settings, experiment_name: str):
     from app.infrastructure.tracking.mlflow_client import MLflowClient
 
     if settings.enable_dagshub_tracking and not settings.enable_mlflow_tracking:
-        raise TrackingSetupError(
-            "DagsHub tracking requires ENABLE_MLFLOW_TRACKING=true because MLflow remains "
-            "the logging API."
+        logger.warning(
+            "Experiment tracking disabled: DagsHub tracking requires "
+            "ENABLE_MLFLOW_TRACKING=true because MLflow remains the logging API."
+        )
+        return ExperimentTracker(
+            MLflowClient(
+                tracking_uri=None,
+                tracking_username=None,
+                tracking_password=None,
+                enabled=False,
+            ),
+            experiment_name,
         )
 
     return ExperimentTracker(

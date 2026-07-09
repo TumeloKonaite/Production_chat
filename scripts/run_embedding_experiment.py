@@ -17,6 +17,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from app.config import Settings, get_settings
+from app.infrastructure.tracking.conventions import (
+    build_common_tracking_params,
+    build_retrieval_tracking_metrics,
+    get_git_sha,
+)
 from app.infrastructure.tracking import create_experiment_tracker
 from app.knowledge.ingestion import ingest_knowledge, prepare_knowledge_ingestion_storage
 from app.repositories.db.session import get_engine, get_session_factory
@@ -739,25 +744,37 @@ def _log_summary_to_tracker(
     best_row = rows[0]
     with tracker.run(run_name):
         tracker.log_params(
-            {
-                "workflow": "embedding_experiment",
-                "config_count": len(rows),
-                "chunk_size": settings.knowledge_chunk_size,
-                "chunk_overlap": settings.knowledge_chunk_overlap,
-                "retriever_type": settings.retriever_type,
-                "top_k": top_k,
-                "query_rewriting": settings.enable_query_rewriting,
-                "reranker": (
-                    settings.reranker_type if getattr(settings, "enable_reranking", False) else "none"
-                ),
-            }
+            build_common_tracking_params(
+                workflow="embedding_experiment",
+                experiment_family="embedding_experiment",
+                run_name=run_name,
+                git_sha=get_git_sha(),
+                extra={
+                    "config_count": len(rows),
+                    "chunk_size": settings.knowledge_chunk_size,
+                    "chunk_overlap": settings.knowledge_chunk_overlap,
+                    "retriever_type": settings.retriever_type,
+                    "top_k": top_k,
+                    "query_rewriting_enabled": settings.enable_query_rewriting,
+                    "reranker_enabled": getattr(settings, "enable_reranking", False),
+                    "reranker_type": (
+                        settings.reranker_type
+                        if getattr(settings, "enable_reranking", False)
+                        else "none"
+                    ),
+                },
+            )
         )
         tracker.log_metrics(
-            {
-                "best_recall_at_k": float(best_row.get("recall_at_k") or 0.0),
-                "best_mrr": float(best_row.get("mrr") or 0.0),
-                "best_precision_at_k": float(best_row.get("precision_at_k") or 0.0),
-            }
+            build_retrieval_tracking_metrics(
+                {
+                    "recall_at_k": best_row.get("recall_at_k"),
+                    "precision_at_k": best_row.get("precision_at_k"),
+                    "mrr": best_row.get("mrr"),
+                    "hit_at_k": best_row.get("hit_at_k"),
+                },
+                extra={"experiment.config_count": len(rows)},
+            )
         )
         for artifact_path in artifact_paths.values():
             tracker.log_artifact(artifact_path)
