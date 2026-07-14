@@ -33,6 +33,7 @@ PERSONAL_QUERY_MARKERS = {
     "location",
 }
 PROJECT_QUERY_MARKERS = {
+    "portfolio",
     "project",
     "projects",
 }
@@ -87,7 +88,7 @@ def build_chat_system_prompt(
         "Use the retrieved context to answer the visitor's question when it is relevant to Tumelo.",
         "Do not invent experience, projects, employers, dates, tools, certifications, or achievements.",
         "If the approved context does not contain enough Tumelo-specific information, say that you do not have that information available.",
-        "If the user is asking a general technical question, you may answer generally, but do not present general knowledge as Tumelo's personal experience.",
+        "Answer only from the approved context; do not use general pretrained knowledge to fill gaps.",
     ]
     if is_broad_project_query(message):
         guidance.append(
@@ -127,22 +128,22 @@ def format_retrieved_context(retrieved_chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n---\n\n".join(formatted_chunks)
 
 
-def should_use_direct_fallback(
-    message: str,
-    retrieved_chunks: Sequence[RetrievedChunk],
-) -> bool:
-    return not retrieved_chunks and _message_prefers_direct_fallback(message)
-
-
 def is_personal_query(message: str) -> bool:
     normalized_message = message.casefold()
     return any(marker in normalized_message for marker in PERSONAL_QUERY_MARKERS)
 
 
+# Retained for offline evaluation workflows. Live chat uses the pre-retrieval router.
+def should_use_direct_fallback(
+    message: str,
+    retrieved_chunks: Sequence[RetrievedChunk],
+) -> bool:
+    return not retrieved_chunks and not _is_general_technical_query(message)
+
+
 def build_direct_fallback_text(message: str) -> str:
     if is_personal_query(message):
         return "I do not have enough approved information about that in Tumelo's knowledge base yet."
-
     return "Could you clarify whether you're asking about Tumelo's background or a general technical topic?"
 
 
@@ -151,20 +152,24 @@ def is_broad_project_query(message: str) -> bool:
     if not any(marker in normalized_message for marker in PROJECT_QUERY_MARKERS):
         return False
 
+    broad_patterns = (
+        r"\bwhat projects\b",
+        r"\bwhich projects\b",
+        r"\blist\b.*\bprojects\b",
+        r"\bmain\b.*\bprojects\b",
+        r"\bprojects (?:has|have|did)\b",
+        r"\b(?:tumelo(?:'s)?|his|your) projects\b",
+        r"\b(?:tumelo(?:'s)?|his|your) portfolio\b",
+    )
+    if any(re.search(pattern, normalized_message) for pattern in broad_patterns):
+        return True
+
     query_terms = [
         token
         for token in _PROJECT_QUERY_TOKEN_RE.findall(normalized_message)
         if len(token) >= 3 and token not in _BROAD_PROJECT_STOPWORDS
     ]
     return len(query_terms) == 0
-
-
-def _message_prefers_direct_fallback(message: str) -> bool:
-    if is_personal_query(message):
-        return True
-    if _is_general_technical_query(message):
-        return False
-    return True
 
 
 def _is_general_technical_query(message: str) -> bool:

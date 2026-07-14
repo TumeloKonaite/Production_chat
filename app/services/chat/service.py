@@ -32,10 +32,16 @@ from app.services.cache import (
 )
 from app.services.chat.prompting import (
     build_chat_system_prompt,
-    build_direct_fallback_text,
-    is_broad_project_query,
-    should_use_direct_fallback,
 )
+from app.services.chat.context_resolution import ConversationContextResolver
+from app.services.chat.models import (
+    DirectResponseDecision,
+    PortfolioKnowledgeDecision,
+    QueryRoute,
+    RetrievalMode,
+    RoutingDecision,
+)
+from app.services.chat.routing import PortfolioScopeRouter, build_direct_response_text
 from app.services.chat.errors import (
     ChatPersistenceError,
     ChatServiceError,
@@ -55,6 +61,7 @@ OBSERVABILITY_ENDPOINT_BY_CHANNEL = {
     "tavus_video": "/api/tavus/tools/ask-tumelo",
     "web_chat": "/chat",
 }
+
 
 @dataclass(frozen=True, slots=True)
 class ChatReply:
@@ -99,6 +106,45 @@ class ResponseCacheContext:
     latency_saved_estimate_ms: int | None = None
 
 
+@dataclass(slots=True)
+class RoutingExecutionContext:
+    decision: RoutingDecision | None = None
+    context_resolution_attempted: bool = False
+    context_resolution_succeeded: bool = False
+    routing_latency_ms: int = 0
+    retrieval_attempted: bool = False
+    retrieval_result_count: int = 0
+    retrieval_used: bool = False
+    generation_used: bool = False
+    grounded_not_found: bool = False
+
+    def metadata(self) -> dict[str, object]:
+        decision = self.decision
+        return {
+            "query_route": decision.route.value if decision is not None else None,
+            "reason_code": decision.reason_code if decision is not None else None,
+            "resolved_query": decision.resolved_query if decision is not None else None,
+            "context_resolution_attempted": self.context_resolution_attempted,
+            "context_resolution_succeeded": self.context_resolution_succeeded,
+            "retrieval_mode": (
+                decision.retrieval_mode.value
+                if isinstance(decision, PortfolioKnowledgeDecision)
+                else None
+            ),
+            "direct_response_kind": (
+                decision.direct_response_kind.value
+                if isinstance(decision, DirectResponseDecision)
+                else None
+            ),
+            "retrieval_attempted": self.retrieval_attempted,
+            "retrieval_result_count": self.retrieval_result_count,
+            "retrieval_used": self.retrieval_used,
+            "generation_used": self.generation_used,
+            "grounded_not_found": self.grounded_not_found,
+            "routing_latency_ms": self.routing_latency_ms,
+        }
+
+
 class ChatService:
     def __init__(
         self,
@@ -129,6 +175,8 @@ class ChatService:
         self.history_limit = history_limit
         self.retrieval_top_k = retrieval_top_k
         self.settings = settings
+        self.context_resolver = ConversationContextResolver()
+        self.portfolio_scope_router = PortfolioScopeRouter(self.context_resolver)
 
     async def generate_reply(
         self,
@@ -206,6 +254,8 @@ class ChatService:
         conversation.model = selected_model_config.config_id
         request_started_at = perf_counter()
         response_cache_context = self._build_response_cache_context()
+        routing_context = RoutingExecutionContext()
+        response_message_metadata = dict(message_metadata)
         trace_id = self._start_trace(
             conversation_id=conversation.id,
             message=normalized_message,
@@ -278,7 +328,9 @@ class ChatService:
                 lock_acquired = False
                 try:
                     if cache_request is not None:
-                        lock_acquired = await self.request_lock.acquire(cache_request.request_hash)
+                        lock_acquired = await self.request_lock.acquire(
+                            cache_request.request_hash
+                        )
                         if not lock_acquired:
                             cached_response = await self._lookup_cached_response(
                                 cache_request=cache_request,
@@ -298,157 +350,209 @@ class ChatService:
                             conversation.id,
                             limit=self.history_limit,
                         )
-                        retrieval_observation = self._start_observability_retrieval(
-                            observability_trace,
+                        routing_started_at = perf_counter()
+                        resolved_query = None
+                        if self.context_resolver.requires_resolution(
+                            normalized_message
+                        ):
+                            routing_context.context_resolution_attempted = True
+                            resolved_query = self.context_resolver.resolve(
+                                message=normalized_message,
+                                recent_messages=recent_messages,
+                            )
+                            routing_context.context_resolution_succeeded = (
+                                resolved_query is not None
+                            )
+                        decision = self.portfolio_scope_router.route(
                             message=normalized_message,
+                            resolved_query=resolved_query,
+                            recent_messages=list(recent_messages),
                         )
-                        retrieved_chunks, retrieval_latency_ms = self._trace_retrieve_chunks(
-                            normalized_message,
-                            trace_id=trace_id,
-                            query_embedding=None,
+                        routing_context.decision = decision
+                        routing_context.routing_latency_ms = self._elapsed_ms(
+                            routing_started_at
                         )
-                        response_cache_context.retrieval_latency_ms = retrieval_latency_ms
-                        self._complete_observability_retrieval(
-                            observability_trace,
-                            retrieval_observation=retrieval_observation,
-                            retrieved_chunks=retrieved_chunks,
-                            latency_ms=retrieval_latency_ms,
-                        )
-                        use_direct_fallback = should_use_direct_fallback(
-                            normalized_message,
-                            retrieved_chunks,
-                        )
-                        self._log_retrieval(
-                            conversation_id=conversation.id,
-                            message_id=user_message.id,
-                            query=normalized_message,
-                            retrieved_chunks=retrieved_chunks,
-                            used_fallback=use_direct_fallback,
-                        )
-
-                        if use_direct_fallback:
+                        if decision.route == QueryRoute.DIRECT_RESPONSE:
+                            use_direct_fallback = True
                             self._record_trace_step(
                                 trace_id=trace_id,
                                 step_type=TraceStepType.PROMPT_BUILT,
-                                name="Direct fallback selected",
+                                name="Deterministic direct response selected",
                                 output_payload={
                                     "direct_fallback": True,
-                                    "retrieved_chunk_count": len(retrieved_chunks),
+                                    **routing_context.metadata(),
                                     "prompt_version": selected_prompt_version,
                                 },
                             )
                             llm_response = self._build_direct_response(
                                 normalized_message,
+                                decision=decision,
                                 prompt_version=selected_prompt_version,
                                 model_config_id=selected_model_config.config_id,
                             )
                             response_cache_context.llm_latency_ms = 0
                         else:
-                            await self.rate_limiting_service.enforce_chat_budget(
-                                actor=rate_limit_actor,
-                            )
-                            llm_messages = [
-                                LLMChatMessage(role=stored_message.role, content=stored_message.content)
-                                for stored_message in recent_messages
-                            ]
-                            prompt_started_at = perf_counter()
-                            system_prompt = build_chat_system_prompt(
-                                base_prompt=base_prompt,
-                                message=normalized_message,
-                                retrieved_chunks=retrieved_chunks,
-                            )
-                            self._record_trace_step(
-                                trace_id=trace_id,
-                                step_type=TraceStepType.PROMPT_BUILT,
-                                name="System prompt built",
-                                output_payload={
-                                    "prompt_version": selected_prompt_version,
-                                    "history_message_count": len(llm_messages),
-                                    "retrieved_chunk_count": len(retrieved_chunks),
-                                    "system_prompt": self._truncate_text(system_prompt),
-                                    "truncated": len(system_prompt) > TRACE_PROMPT_PREVIEW_LIMIT,
-                                },
-                                latency_ms=self._elapsed_ms(prompt_started_at),
-                            )
-                            llm_started_at = self._utcnow()
-                            llm_timer = perf_counter()
-                            self._record_trace_step(
-                                trace_id=trace_id,
-                                step_type=TraceStepType.LLM_CALL_STARTED,
-                                status=TraceStatus.STARTED,
-                                name="LLM call started",
-                                input_payload={
-                                    "model_config_id": selected_model_config.config_id,
-                                    "provider": selected_model_config.provider,
-                                    "model": selected_model_config.model,
-                                    "message_count": len(llm_messages),
-                                },
-                                started_at=llm_started_at,
-                            )
-                            llm_observation = self._start_observability_llm_call(
+                            retrieval_observation = self._start_observability_retrieval(
                                 observability_trace,
-                                provider=selected_model_config.provider,
-                                model=selected_model_config.model,
+                                message=decision.resolved_query,
                             )
-                            try:
-                                llm_response = await self.llm_service.generate_response(
-                                    llm_messages,
-                                    system_prompt=system_prompt,
+                            routing_context.retrieval_attempted = True
+                            retrieved_chunks, retrieval_latency_ms = (
+                                self._trace_retrieve_chunks(
+                                    decision.resolved_query,
+                                    retrieval_mode=decision.retrieval_mode,
+                                    trace_id=trace_id,
+                                    query_embedding=None,
+                                )
+                            )
+                            routing_context.retrieval_result_count = len(
+                                retrieved_chunks
+                            )
+                            routing_context.retrieval_used = bool(retrieved_chunks)
+                            response_cache_context.retrieval_latency_ms = (
+                                retrieval_latency_ms
+                            )
+                            self._complete_observability_retrieval(
+                                observability_trace,
+                                retrieval_observation=retrieval_observation,
+                                retrieved_chunks=retrieved_chunks,
+                                latency_ms=retrieval_latency_ms,
+                            )
+                            self._log_retrieval(
+                                conversation_id=conversation.id,
+                                message_id=user_message.id,
+                                query=decision.resolved_query,
+                                retrieved_chunks=retrieved_chunks,
+                                used_fallback=not retrieved_chunks,
+                            )
+
+                            if not retrieved_chunks:
+                                use_direct_fallback = True
+                                routing_context.grounded_not_found = True
+                                llm_response = self._build_grounded_not_found_response(
                                     prompt_version=selected_prompt_version,
-                                    retrieval_config=self.settings.default_retrieval_config,
                                     model_config_id=selected_model_config.config_id,
                                 )
-                            except Exception as exc:
+                                response_cache_context.llm_latency_ms = 0
+                            else:
+                                await self.rate_limiting_service.enforce_chat_budget(
+                                    actor=rate_limit_actor,
+                                )
+                                routing_context.generation_used = True
+                                llm_messages = [
+                                    LLMChatMessage(
+                                        role=stored_message.role,
+                                        content=stored_message.content,
+                                    )
+                                    for stored_message in recent_messages
+                                ]
+                                prompt_started_at = perf_counter()
+                                system_prompt = build_chat_system_prompt(
+                                    base_prompt=base_prompt,
+                                    message=decision.resolved_query,
+                                    retrieved_chunks=retrieved_chunks,
+                                )
+                                self._record_trace_step(
+                                    trace_id=trace_id,
+                                    step_type=TraceStepType.PROMPT_BUILT,
+                                    name="Grounded system prompt built",
+                                    output_payload={
+                                        "prompt_version": selected_prompt_version,
+                                        "history_message_count": len(llm_messages),
+                                        "retrieved_chunk_count": len(retrieved_chunks),
+                                        "system_prompt": self._truncate_text(
+                                            system_prompt
+                                        ),
+                                        "truncated": len(system_prompt)
+                                        > TRACE_PROMPT_PREVIEW_LIMIT,
+                                        **routing_context.metadata(),
+                                    },
+                                    latency_ms=self._elapsed_ms(prompt_started_at),
+                                )
+                                llm_started_at = self._utcnow()
+                                llm_timer = perf_counter()
+                                self._record_trace_step(
+                                    trace_id=trace_id,
+                                    step_type=TraceStepType.LLM_CALL_STARTED,
+                                    status=TraceStatus.STARTED,
+                                    name="LLM call started",
+                                    input_payload={
+                                        "model_config_id": selected_model_config.config_id,
+                                        "provider": selected_model_config.provider,
+                                        "model": selected_model_config.model,
+                                        "message_count": len(llm_messages),
+                                    },
+                                    started_at=llm_started_at,
+                                )
+                                llm_observation = self._start_observability_llm_call(
+                                    observability_trace,
+                                    provider=selected_model_config.provider,
+                                    model=selected_model_config.model,
+                                )
+                                try:
+                                    llm_response = await self.llm_service.generate_response(
+                                        llm_messages,
+                                        system_prompt=system_prompt,
+                                        prompt_version=selected_prompt_version,
+                                        retrieval_config=self.settings.default_retrieval_config,
+                                        model_config_id=selected_model_config.config_id,
+                                    )
+                                except Exception as exc:
+                                    self._complete_observability_llm_call(
+                                        observability_trace,
+                                        llm_observation=llm_observation,
+                                        provider=selected_model_config.provider,
+                                        model=selected_model_config.model,
+                                        latency_ms=self._elapsed_ms(llm_timer),
+                                        input_tokens=None,
+                                        output_tokens=None,
+                                        total_tokens=None,
+                                        estimated_cost_usd=None,
+                                        error_message=self._safe_trace_error_message(
+                                            exc
+                                        ),
+                                    )
+                                    raise
+                                llm_latency_ms = (
+                                    llm_response.latency_ms
+                                    or self._elapsed_ms(llm_timer)
+                                )
+                                response_cache_context.llm_latency_ms = llm_latency_ms
                                 self._complete_observability_llm_call(
                                     observability_trace,
                                     llm_observation=llm_observation,
-                                    provider=selected_model_config.provider,
-                                    model=selected_model_config.model,
-                                    latency_ms=self._elapsed_ms(llm_timer),
-                                    input_tokens=None,
-                                    output_tokens=None,
-                                    total_tokens=None,
-                                    estimated_cost_usd=None,
-                                    error_message=self._safe_trace_error_message(exc),
+                                    provider=llm_response.model_provider,
+                                    model=llm_response.model_name,
+                                    latency_ms=llm_latency_ms,
+                                    input_tokens=llm_response.token_usage.input_tokens,
+                                    output_tokens=llm_response.token_usage.output_tokens,
+                                    total_tokens=llm_response.token_usage.total_tokens,
+                                    estimated_cost_usd=llm_response.estimated_cost_usd,
                                 )
-                                raise
-                            llm_latency_ms = llm_response.latency_ms or self._elapsed_ms(llm_timer)
-                            response_cache_context.llm_latency_ms = llm_latency_ms
-                            self._complete_observability_llm_call(
-                                observability_trace,
-                                llm_observation=llm_observation,
-                                provider=llm_response.model_provider,
-                                model=llm_response.model_name,
-                                latency_ms=llm_latency_ms,
-                                input_tokens=llm_response.token_usage.input_tokens,
-                                output_tokens=llm_response.token_usage.output_tokens,
-                                total_tokens=llm_response.token_usage.total_tokens,
-                                estimated_cost_usd=llm_response.estimated_cost_usd,
-                            )
-                            self._record_trace_step(
-                                trace_id=trace_id,
-                                step_type=TraceStepType.LLM_CALL_COMPLETED,
-                                name="LLM call completed",
-                                output_payload={
-                                    "model_config_id": llm_response.model_config_id,
-                                    "provider": llm_response.model_provider,
-                                    "model": llm_response.model_name,
-                                    "token_usage": {
-                                        "input_tokens": llm_response.token_usage.input_tokens,
-                                        "output_tokens": llm_response.token_usage.output_tokens,
-                                        "total_tokens": llm_response.token_usage.total_tokens,
+                                self._record_trace_step(
+                                    trace_id=trace_id,
+                                    step_type=TraceStepType.LLM_CALL_COMPLETED,
+                                    name="LLM call completed",
+                                    output_payload={
+                                        "model_config_id": llm_response.model_config_id,
+                                        "provider": llm_response.model_provider,
+                                        "model": llm_response.model_name,
+                                        "token_usage": {
+                                            "input_tokens": llm_response.token_usage.input_tokens,
+                                            "output_tokens": llm_response.token_usage.output_tokens,
+                                            "total_tokens": llm_response.token_usage.total_tokens,
+                                        },
+                                        "estimated_cost_usd": llm_response.estimated_cost_usd,
                                     },
-                                    "estimated_cost_usd": llm_response.estimated_cost_usd,
-                                },
-                                latency_ms=llm_latency_ms,
-                                started_at=llm_started_at,
-                                completed_at=self._utcnow(),
-                            )
-                            await self.rate_limiting_service.record_llm_usage(
-                                actor=rate_limit_actor,
-                                total_tokens=llm_response.token_usage.total_tokens,
-                                estimated_cost_usd=llm_response.estimated_cost_usd,
-                            )
+                                    latency_ms=llm_latency_ms,
+                                    started_at=llm_started_at,
+                                    completed_at=self._utcnow(),
+                                )
+                                await self.rate_limiting_service.record_llm_usage(
+                                    actor=rate_limit_actor,
+                                    total_tokens=llm_response.token_usage.total_tokens,
+                                    estimated_cost_usd=llm_response.estimated_cost_usd,
+                                )
 
                         if self._should_store_response_cache(
                             message=normalized_message,
@@ -471,12 +575,17 @@ class ChatService:
                     if lock_acquired and cache_request is not None:
                         await self.request_lock.release(cache_request.request_hash)
 
+            if routing_context.decision is not None:
+                routing_metadata = routing_context.metadata()
+                response_message_metadata.update(routing_metadata)
+                response_message_metadata["routing"] = routing_metadata
+
             # Only persist the assistant turn after the final response succeeds.
             assistant_message = self._store_assistant_message(
                 conversation=conversation,
                 llm_response=llm_response,
                 channel=channel,
-                message_metadata=message_metadata,
+                message_metadata=response_message_metadata,
                 trace_id=trace_id,
                 observability_trace=observability_trace,
                 response_cache_context=response_cache_context,
@@ -494,7 +603,9 @@ class ChatService:
                 started_at=request_started_at,
                 metadata={
                     "conversation_id": conversation.id,
-                    "response_cache": self._response_cache_metadata(response_cache_context),
+                    "response_cache": self._response_cache_metadata(
+                        response_cache_context
+                    ),
                 },
             )
             self._fail_observability_trace(
@@ -516,7 +627,9 @@ class ChatService:
                 started_at=request_started_at,
                 metadata={
                     "conversation_id": conversation.id,
-                    "response_cache": self._response_cache_metadata(response_cache_context),
+                    "response_cache": self._response_cache_metadata(
+                        response_cache_context
+                    ),
                 },
             )
             self._fail_observability_trace(
@@ -536,6 +649,7 @@ class ChatService:
                 "conversation_id": conversation.id,
                 "model_config_id": llm_response.model_config_id,
                 "estimated_cost_usd": llm_response.estimated_cost_usd,
+                **routing_context.metadata(),
             },
             latency_ms=total_latency_ms,
             completed_at=self._utcnow(),
@@ -547,7 +661,7 @@ class ChatService:
             latency_ms=total_latency_ms,
             conversation_id=conversation.id,
             channel=channel,
-            message_metadata=message_metadata,
+            message_metadata=response_message_metadata,
             assistant_message_id=assistant_message.id,
             observability_trace=observability_trace,
             response_cache_context=response_cache_context,
@@ -559,6 +673,7 @@ class ChatService:
             conversation_id=conversation.id,
             assistant_message_id=assistant_message.id,
             response_cache_context=response_cache_context,
+            routing_context=routing_context,
         )
         self._log_response_cache_context(response_cache_context)
         self._flush_observability_tracer()
@@ -598,7 +713,9 @@ class ChatService:
                 title=external_title,
             )
 
-        if allow_external_conversation_id and not self._is_valid_conversation_id(conversation_id):
+        if allow_external_conversation_id and not self._is_valid_conversation_id(
+            conversation_id
+        ):
             return self._get_or_create_external_conversation(
                 external_conversation_id=conversation_id,
                 prompt_version=prompt_version,
@@ -616,7 +733,9 @@ class ChatService:
             raise ConversationNotFoundError("Conversation not found.")
 
         if model_config_id is not None:
-            conversation.model = self.llm_service.get_model_config(model_config_id).config_id
+            conversation.model = self.llm_service.get_model_config(
+                model_config_id
+            ).config_id
 
         return conversation
 
@@ -648,7 +767,9 @@ class ChatService:
         title: str | None,
     ):
         try:
-            conversation = self.repository.get_conversation_by_visitor_id(external_conversation_id)
+            conversation = self.repository.get_conversation_by_visitor_id(
+                external_conversation_id
+            )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
 
@@ -662,7 +783,9 @@ class ChatService:
                 except ConversationRepositoryError as exc:
                     raise ChatPersistenceError() from exc
             if model_config_id is not None:
-                conversation.model = self.llm_service.get_model_config(model_config_id).config_id
+                conversation.model = self.llm_service.get_model_config(
+                    model_config_id
+                ).config_id
             return conversation
 
         return self._create_conversation(
@@ -676,12 +799,12 @@ class ChatService:
         self,
         message: str,
         *,
+        retrieval_mode: RetrievalMode = RetrievalMode.HYBRID,
         query_embedding: list[float] | None = None,
     ) -> list[RetrievedChunk]:
         try:
-            broad_project_chunks = self._retrieve_broad_project_chunks(message)
-            if broad_project_chunks:
-                return broad_project_chunks
+            if retrieval_mode == RetrievalMode.PROJECT_OVERVIEW:
+                return self._retrieve_broad_project_chunks()
             return self.retrieval_service.retrieve(
                 message,
                 top_k=self.retrieval_top_k,
@@ -694,6 +817,7 @@ class ChatService:
         self,
         message: str,
         *,
+        retrieval_mode: RetrievalMode = RetrievalMode.HYBRID,
         trace_id: str | None,
         query_embedding: list[float] | None = None,
     ) -> tuple[list[RetrievedChunk], int]:
@@ -708,6 +832,7 @@ class ChatService:
                 "query": message,
                 "top_k": self.retrieval_top_k,
                 "retriever_type": self.settings.retriever_type,
+                "retrieval_mode": retrieval_mode.value,
                 "similarity_threshold": self.settings.retrieval_min_similarity,
                 "reranker_enabled": self.retrieval_service.reranker_enabled,
                 "reranker_type": self.retrieval_service.reranker_type,
@@ -716,6 +841,7 @@ class ChatService:
         )
         retrieved_chunks = self._retrieve_chunks(
             message,
+            retrieval_mode=retrieval_mode,
             query_embedding=query_embedding,
         )
         latency_ms = self._elapsed_ms(retrieval_timer)
@@ -752,10 +878,7 @@ class ChatService:
         )
         return retrieved_chunks, latency_ms
 
-    def _retrieve_broad_project_chunks(self, message: str) -> list[RetrievedChunk]:
-        if not is_broad_project_query(message):
-            return []
-
+    def _retrieve_broad_project_chunks(self) -> list[RetrievedChunk]:
         seen_sections: set[str] = set()
         project_chunks = []
         for chunk in self.knowledge_repository.list_by_source("projects.md"):
@@ -815,12 +938,37 @@ class ChatService:
         self,
         message: str,
         *,
+        decision: DirectResponseDecision,
         prompt_version: str,
         model_config_id: str,
     ) -> LLMGeneratedResponse:
         selected_model_config = self.llm_service.get_model_config(model_config_id)
         return LLMGeneratedResponse(
-            message=build_direct_fallback_text(message),
+            message=build_direct_response_text(decision.direct_response_kind, message),
+            model=selected_model_config.model,
+            model_provider=selected_model_config.provider,
+            model_name=selected_model_config.model,
+            model_config_id=selected_model_config.config_id,
+            prompt_version=prompt_version,
+            retrieval_config=self.settings.default_retrieval_config,
+            latency_ms=0,
+            token_usage=TokenUsage(),
+            estimated_cost_usd=None,
+        )
+
+    def _build_grounded_not_found_response(
+        self,
+        *,
+        prompt_version: str,
+        model_config_id: str,
+    ) -> LLMGeneratedResponse:
+        selected_model_config = self.llm_service.get_model_config(model_config_id)
+        return LLMGeneratedResponse(
+            message=(
+                "I do not have enough approved information to answer that accurately. "
+                "You could ask about Tumelo's listed projects, technical skills, education, "
+                "or work experience."
+            ),
             model=selected_model_config.model,
             model_provider=selected_model_config.provider,
             model_name=selected_model_config.model,
@@ -859,8 +1007,8 @@ class ChatService:
                     observability_trace.external_trace_id
                 )
         if response_cache_context.enabled:
-            assistant_message_metadata["response_cache"] = self._response_cache_message_metadata(
-                response_cache_context
+            assistant_message_metadata["response_cache"] = (
+                self._response_cache_message_metadata(response_cache_context)
             )
         try:
             return self.repository.add_message(
@@ -919,8 +1067,12 @@ class ChatService:
             trace = self.trace_service.start_trace(
                 conversation_id=conversation_id,
                 user_id=self._extract_optional_string(message_metadata, "user_id"),
-                request_id=self._extract_optional_string(message_metadata, "request_id"),
-                session_id=self._extract_optional_string(message_metadata, "session_id"),
+                request_id=self._extract_optional_string(
+                    message_metadata, "request_id"
+                ),
+                session_id=self._extract_optional_string(
+                    message_metadata, "session_id"
+                ),
                 input_text=message,
                 status=TraceStatus.STARTED,
                 llm_provider=self._extract_model_provider(model_config_id),
@@ -1007,7 +1159,9 @@ class ChatService:
                 observability_trace=observability_trace,
             )
             trace_metadata["assistant_message_id"] = assistant_message_id
-            trace_metadata["response_cache"] = self._response_cache_metadata(response_cache_context)
+            trace_metadata["response_cache"] = self._response_cache_metadata(
+                response_cache_context
+            )
             self.trace_service.complete_trace(
                 trace_id,
                 output_text=output_text,
@@ -1101,7 +1255,9 @@ class ChatService:
             "prompt_version": prompt_version,
             "model_config_id": model_config_id,
             "llm_provider": self._extract_model_provider(model_config_id),
-            "llm_model": self._extract_model_name(model_config_id) if model_config_id is not None else None,
+            "llm_model": self._extract_model_name(model_config_id)
+            if model_config_id is not None
+            else None,
             "retriever_type": self.settings.retriever_type,
             "vector_store_provider": self.settings.vector_store_provider,
             "vector_store_name": self._get_vector_store_name(),
@@ -1123,7 +1279,9 @@ class ChatService:
             if observability_trace.external_trace_id is not None:
                 metadata["external_trace_id"] = observability_trace.external_trace_id
                 if observability_trace.provider == "langfuse":
-                    metadata["langfuse_trace_id"] = observability_trace.external_trace_id
+                    metadata["langfuse_trace_id"] = (
+                        observability_trace.external_trace_id
+                    )
         return metadata
 
     def _safe_trace_error_message(self, exc: Exception) -> str:
@@ -1385,6 +1543,7 @@ class ChatService:
         conversation_id: str,
         assistant_message_id: str,
         response_cache_context: ResponseCacheContext,
+        routing_context: RoutingExecutionContext,
     ) -> None:
         try:
             self.observability_tracer.complete_chat_request(
@@ -1402,7 +1561,10 @@ class ChatService:
                     {
                         "assistant_message_id": assistant_message_id,
                         "final_response_metadata": {
-                            "response_cache": self._response_cache_metadata(response_cache_context),
+                            "response_cache": self._response_cache_metadata(
+                                response_cache_context
+                            ),
+                            "routing": routing_context.metadata(),
                         },
                     }
                 ),
@@ -1452,8 +1614,7 @@ class ChatService:
             enabled=self.settings.enable_redis,
             provider="upstash" if self.settings.enable_redis else None,
             exact_enabled=(
-                self.settings.enable_redis
-                and self.settings.exact_cache_enabled
+                self.settings.enable_redis and self.settings.exact_cache_enabled
             ),
             semantic_enabled=False,
             threshold=None,
@@ -1482,10 +1643,13 @@ class ChatService:
             )
             return self._build_cached_response(validated_exact_entry)
         if exact_outcome.hit and validated_exact_entry is None:
-            response_cache_context.reason = self._cache_entry_miss_reason(
-                exact_outcome.entry,
-                cache_request=cache_request,
-            ) or "miss_metadata_mismatch"
+            response_cache_context.reason = (
+                self._cache_entry_miss_reason(
+                    exact_outcome.entry,
+                    cache_request=cache_request,
+                )
+                or "miss_metadata_mismatch"
+            )
         return None
 
     def _validated_cache_entry(
@@ -1494,7 +1658,11 @@ class ChatService:
         *,
         cache_request: CacheLookupRequest,
     ) -> CacheLookupResult | None:
-        return entry if self._cache_entry_miss_reason(entry, cache_request=cache_request) is None else None
+        return (
+            entry
+            if self._cache_entry_miss_reason(entry, cache_request=cache_request) is None
+            else None
+        )
 
     def _cache_entry_miss_reason(
         self,
@@ -1516,17 +1684,26 @@ class ChatService:
             return "miss_metadata_mismatch"
         if entry.embedding_model != cache_request.metadata_scope.embedding_model:
             return "miss_metadata_mismatch"
-        if entry.knowledge_base_version != cache_request.metadata_scope.knowledge_base_version:
+        if (
+            entry.knowledge_base_version
+            != cache_request.metadata_scope.knowledge_base_version
+        ):
             return "miss_metadata_mismatch"
         if entry.retriever_type != cache_request.metadata_scope.retriever_type:
             return "miss_metadata_mismatch"
         if entry.top_k != cache_request.metadata_scope.top_k:
             return "miss_metadata_mismatch"
-        if entry.query_rewrite_enabled != cache_request.metadata_scope.query_rewrite_enabled:
+        if (
+            entry.query_rewrite_enabled
+            != cache_request.metadata_scope.query_rewrite_enabled
+        ):
             return "miss_metadata_mismatch"
         if entry.reranker_enabled != cache_request.metadata_scope.reranker_enabled:
             return "miss_metadata_mismatch"
-        if entry.retriever_config_hash != cache_request.metadata_scope.retriever_config_hash:
+        if (
+            entry.retriever_config_hash
+            != cache_request.metadata_scope.retriever_config_hash
+        ):
             return "miss_metadata_mismatch"
         if entry.expires_at is not None and entry.expires_at <= self._utcnow():
             return "miss_expired"
@@ -1776,7 +1953,9 @@ class ChatService:
     ) -> None:
         logger.info(
             "Response cache outcome",
-            extra={"response_cache": self._response_cache_metadata(response_cache_context)},
+            extra={
+                "response_cache": self._response_cache_metadata(response_cache_context)
+            },
         )
 
     def _is_time_sensitive_query(self, message: str) -> bool:

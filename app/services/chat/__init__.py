@@ -6,6 +6,7 @@ from app.services.chat.errors import (
     InvalidConversationIdError,
 )
 from app.services.chat.service import ChatReply, ChatService
+from app.services.chat.models import DirectResponseKind, QueryRoute, RetrievalMode
 
 __all__ = [
     "ChatPersistenceError",
@@ -15,4 +16,7 @@ __all__ = [
     "ConversationNotFoundError",
     "InvalidChatMessageError",
     "InvalidConversationIdError",
+    "DirectResponseKind",
+    "QueryRoute",
+    "RetrievalMode",
 ]

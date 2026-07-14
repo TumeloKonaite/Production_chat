@@ -47,8 +47,11 @@ app/
       session.py
   services/
     chat/
+      context_resolution.py
       errors.py
+      models.py
       prompting.py
+      routing.py
       service.py
     tavus/
       errors.py
@@ -195,6 +198,13 @@ The backend exposes:
 
 - `GET /health` for lightweight liveness
 - `GET /ready` for database-backed readiness
+
+`POST /chat` deterministically routes greetings, acknowledgements, unresolved follow-ups, and
+out-of-scope questions to no-retrieval templates. Questions about Tumelo use only approved
+portfolio retrieval, with an explicit curated project-overview mode and a grounded not-found
+response when evidence is unavailable. See
+[`docs/architecture/chat-routing.md`](docs/architecture/chat-routing.md) for the full flow and
+observability contract.
 
 See `docs/deployment/supabase.md` for Supabase-specific production setup, URL formats, SSL requirements, and migration commands.
 See `docs/deployment/modal.md` for Modal deployment, secret setup, and production smoke tests.

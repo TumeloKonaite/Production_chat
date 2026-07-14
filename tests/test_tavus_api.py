@@ -222,7 +222,7 @@ def test_tavus_tool_endpoint_accepts_valid_secret_and_calls_chat_service(tmp_pat
         "/api/tavus/tools/ask-tumelo",
         headers={"x-tavus-tool-secret": "tool-secret"},
         json={
-            "message": "What projects has Tumelo built?",
+            "message": "Tell me about Tumelo's chatbot project",
             "tavus_conversation_id": "tavus-external-conv-1",
             "visitor_name": "Amina",
         },
