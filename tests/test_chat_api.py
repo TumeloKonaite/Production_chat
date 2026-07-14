@@ -160,12 +160,16 @@ class FakeRetrievalService:
         query_embedding: list[float] | None = None,
     ) -> None:
         self.retrieved_chunks = (
-            [build_retrieved_chunk()] if retrieved_chunks is None else list(retrieved_chunks)
+            [build_retrieved_chunk()]
+            if retrieved_chunks is None
+            else list(retrieved_chunks)
         )
         self.calls: list[tuple[str, int | None]] = []
         self.query_embeddings_used: list[list[float] | None] = []
         self.embed_query_calls: list[str] = []
-        self.query_embedding = [0.11, 0.22, 0.33] if query_embedding is None else list(query_embedding)
+        self.query_embedding = (
+            [0.11, 0.22, 0.33] if query_embedding is None else list(query_embedding)
+        )
         self.reranker_enabled = False
         self.reranker_type = "none"
         self.vector_store_name = "pgvector"
@@ -408,7 +412,9 @@ def build_test_settings(
     enable_redis = bool(
         overrides.get(
             "enable_redis",
-            legacy_cache_enabled or legacy_rate_limit_enabled or overrides.get("request_lock_enabled", False),
+            legacy_cache_enabled
+            or legacy_rate_limit_enabled
+            or overrides.get("request_lock_enabled", False),
         )
     )
     values: dict[str, object] = {
@@ -513,11 +519,15 @@ def fetch_messages(session_factory: sessionmaker[Session]) -> list[Message]:
 
 def fetch_retrieval_logs(session_factory: sessionmaker[Session]) -> list[RetrievalLog]:
     with session_factory() as session:
-        statement = select(RetrievalLog).order_by(RetrievalLog.created_at.asc(), RetrievalLog.id.asc())
+        statement = select(RetrievalLog).order_by(
+            RetrievalLog.created_at.asc(), RetrievalLog.id.asc()
+        )
         return list(session.scalars(statement))
 
 
-def fetch_message_feedback(session_factory: sessionmaker[Session]) -> list[MessageFeedback]:
+def fetch_message_feedback(
+    session_factory: sessionmaker[Session],
+) -> list[MessageFeedback]:
     with session_factory() as session:
         statement = select(MessageFeedback).order_by(
             MessageFeedback.created_at.asc(),
@@ -528,13 +538,19 @@ def fetch_message_feedback(session_factory: sessionmaker[Session]) -> list[Messa
 
 def fetch_chat_traces(session_factory: sessionmaker[Session]) -> list[ChatTrace]:
     with session_factory() as session:
-        statement = select(ChatTrace).order_by(ChatTrace.created_at.asc(), ChatTrace.id.asc())
+        statement = select(ChatTrace).order_by(
+            ChatTrace.created_at.asc(), ChatTrace.id.asc()
+        )
         return list(session.scalars(statement))
 
 
-def fetch_chat_trace_steps(session_factory: sessionmaker[Session]) -> list[ChatTraceStep]:
+def fetch_chat_trace_steps(
+    session_factory: sessionmaker[Session],
+) -> list[ChatTraceStep]:
     with session_factory() as session:
-        statement = select(ChatTraceStep).order_by(ChatTraceStep.step_index.asc(), ChatTraceStep.created_at.asc())
+        statement = select(ChatTraceStep).order_by(
+            ChatTraceStep.step_index.asc(), ChatTraceStep.created_at.asc()
+        )
         return list(session.scalars(statement))
 
 
@@ -605,7 +621,9 @@ def test_ready_returns_service_unavailable_when_database_is_down() -> None:
     assert response.json() == {"status": "degraded", "database": "unavailable"}
 
 
-def test_ready_returns_service_unavailable_when_database_driver_raises_non_sqlalchemy_error() -> None:
+def test_ready_returns_service_unavailable_when_database_driver_raises_non_sqlalchemy_error() -> (
+    None
+):
     class FailingSession:
         def execute(self, *_args, **_kwargs) -> None:
             raise UnicodeError("label empty or too long")
@@ -624,7 +642,9 @@ def test_ready_returns_service_unavailable_when_database_driver_raises_non_sqlal
     assert response.json() == {"status": "degraded", "database": "unavailable"}
 
 
-def test_ready_returns_ok_with_redis_when_enabled_and_reachable(tmp_path, monkeypatch) -> None:
+def test_ready_returns_ok_with_redis_when_enabled_and_reachable(
+    tmp_path, monkeypatch
+) -> None:
     class HealthyRedisClient:
         async def get(self, key: str) -> str | None:
             return None
@@ -653,7 +673,9 @@ def test_ready_returns_ok_with_redis_when_enabled_and_reachable(tmp_path, monkey
     assert response.json() == {"status": "ok", "database": "ok", "redis": "ok"}
 
 
-def test_ready_returns_service_unavailable_when_redis_enabled_without_url(tmp_path) -> None:
+def test_ready_returns_service_unavailable_when_redis_enabled_without_url(
+    tmp_path,
+) -> None:
     fake_llm = FakeLLMService()
     client, _, _ = build_test_client(
         tmp_path,
@@ -681,7 +703,9 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
     fake_llm = FakeLLMService(reply="Tumelo has worked on AI systems.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    response = client.post("/chat", json={"message": "Tell me about Tumelo's AI projects"})
+    response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's AI project work"}
+    )
 
     app.dependency_overrides.clear()
 
@@ -718,7 +742,9 @@ def test_chat_creates_conversation_and_returns_conversation_id(tmp_path) -> None
 
 
 def test_chat_stores_user_and_assistant_messages(tmp_path) -> None:
-    fake_llm = FakeLLMService(reply="Production readiness is strongest in the RAG stack.")
+    fake_llm = FakeLLMService(
+        reply="Production readiness is strongest in the RAG stack."
+    )
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
     response = client.post(
@@ -756,7 +782,9 @@ def test_chat_creates_internal_trace_records(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Tumelo built a production-ready chatbot.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot project"})
+    response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's chatbot project"}
+    )
 
     app.dependency_overrides.clear()
 
@@ -811,7 +839,9 @@ def test_chat_creates_internal_trace_records(tmp_path) -> None:
 def test_chat_persists_external_langfuse_trace_id_when_available(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Trace-aware response.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
-    app.dependency_overrides[get_observability_tracer] = lambda: ProviderObservabilityTracer()
+    app.dependency_overrides[get_observability_tracer] = lambda: (
+        ProviderObservabilityTracer()
+    )
 
     response = client.post("/chat", json={"message": "Tell me about observability."})
 
@@ -873,8 +903,14 @@ def test_chat_exact_cache_hit_skips_embedding_retrieval_and_llm(tmp_path) -> Non
     traces = fetch_chat_traces(session_factory)
     assert traces[0].trace_metadata["response_cache"]["response_cache_hit"] is True
     assert traces[0].trace_metadata["response_cache"]["response_cache_type"] == "exact"
-    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == "exact_hit"
-    assert traces[0].trace_metadata["response_cache"]["response_cache_lookup_latency_ms"] == 4
+    assert (
+        traces[0].trace_metadata["response_cache"]["response_cache_reason"]
+        == "exact_hit"
+    )
+    assert (
+        traces[0].trace_metadata["response_cache"]["response_cache_lookup_latency_ms"]
+        == 4
+    )
 
 
 def test_chat_cache_miss_writes_exact_cache_entry(tmp_path) -> None:
@@ -917,10 +953,13 @@ def test_chat_cache_miss_writes_exact_cache_entry(tmp_path) -> None:
     assert fake_cache.store_entries[0].question_embedding is None
 
     traces = fetch_chat_traces(session_factory)
-    assert traces[0].trace_metadata["response_cache"]["response_cache_reason"] == "miss_no_exact_entry"
-    assert traces[0].trace_metadata["response_cache"]["response_cache_write_reason"] == (
-        "write_success"
+    assert (
+        traces[0].trace_metadata["response_cache"]["response_cache_reason"]
+        == "miss_no_exact_entry"
     )
+    assert traces[0].trace_metadata["response_cache"][
+        "response_cache_write_reason"
+    ] == ("write_success")
 
 
 def test_chat_duplicate_inflight_request_returns_409(tmp_path) -> None:
@@ -967,27 +1006,31 @@ def test_chat_duplicate_inflight_request_returns_409(tmp_path) -> None:
 
 def test_chat_exact_cache_hit_works_with_versioned_runtime_model_name(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Versioned-model cached answer.")
-    fake_llm.response_model_name_overrides["openai:gpt-4.1-mini"] = "gpt-4.1-mini-2025-04-14"
+    fake_llm.response_model_name_overrides["openai:gpt-4.1-mini"] = (
+        "gpt-4.1-mini-2025-04-14"
+    )
     fake_retrieval = FakeRetrievalService(query_embedding=[0.4, 0.5, 0.6])
     fake_cache = FakeResponseCache(
-        exact_outcome=lambda request: ResponseCacheLookupOutcome(
-            cache_type="exact",
-            hit=True,
-            reason="exact_hit",
-            latency_ms=4,
-            entry=build_cache_lookup_result(
-                answer_text="Versioned-model cached answer.",
-                metadata_scope_hash=request.metadata_scope_hash,
-                prompt_version=request.metadata_scope.prompt_version,
-            ),
-            entry_id="entry-1",
-        )
-        if fake_cache.store_entries
-        else ResponseCacheLookupOutcome(
-            cache_type="exact",
-            hit=False,
-            reason="miss_no_exact_entry",
-            latency_ms=2,
+        exact_outcome=lambda request: (
+            ResponseCacheLookupOutcome(
+                cache_type="exact",
+                hit=True,
+                reason="exact_hit",
+                latency_ms=4,
+                entry=build_cache_lookup_result(
+                    answer_text="Versioned-model cached answer.",
+                    metadata_scope_hash=request.metadata_scope_hash,
+                    prompt_version=request.metadata_scope.prompt_version,
+                ),
+                entry_id="entry-1",
+            )
+            if fake_cache.store_entries
+            else ResponseCacheLookupOutcome(
+                cache_type="exact",
+                hit=False,
+                reason="miss_no_exact_entry",
+                latency_ms=2,
+            )
         ),
         store_outcome=ResponseCacheStoreOutcome(
             success=True,
@@ -1159,11 +1202,15 @@ def test_failed_llm_response_does_not_write_cache_entry(tmp_path) -> None:
     assert fake_cache.store_entries == []
 
 
-def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_path) -> None:
+def test_chat_with_existing_conversation_appends_messages_and_loads_history(
+    tmp_path,
+) -> None:
     fake_llm = FakeLLMService()
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    first_response = client.post("/chat", json={"message": "Tell me about Tumelo's AI projects"})
+    first_response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's AI project work"}
+    )
     conversation_id = first_response.json()["conversation_id"]
 
     second_response = client.post(
@@ -1180,15 +1227,20 @@ def test_chat_with_existing_conversation_appends_messages_and_loads_history(tmp_
     assert second_response.status_code == 200
 
     messages = fetch_messages(session_factory)
-    assert [message.role for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
     assert len(fake_llm.calls) == 2
     assert [(message.role, message.content) for message in fake_llm.calls[0]] == [
-        ("user", "Tell me about Tumelo's AI projects"),
+        ("user", "Tell me about Tumelo's AI project work"),
     ]
     assert fake_llm.prompt_versions == ["v1_professional", "v1_professional"]
     assert fake_llm.model_config_ids == ["openai:gpt-4.1-mini", "openai:gpt-4.1-mini"]
     assert [(message.role, message.content) for message in fake_llm.calls[1]] == [
-        ("user", "Tell me about Tumelo's AI projects"),
+        ("user", "Tell me about Tumelo's AI project work"),
         ("assistant", "Mocked assistant response."),
         ("user", "Which one best shows production readiness?"),
     ]
@@ -1244,11 +1296,13 @@ def test_chat_returns_not_found_for_missing_conversation(tmp_path) -> None:
     assert response.json() == {"detail": "Conversation not found."}
 
 
-def test_llm_failures_leave_user_message_persisted_without_assistant_message(tmp_path) -> None:
+def test_llm_failures_leave_user_message_persisted_without_assistant_message(
+    tmp_path,
+) -> None:
     fake_llm = FakeLLMService(fail=True)
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    response = client.post("/chat", json={"message": "Hello"})
+    response = client.post("/chat", json={"message": "Tell me about Tumelo's work"})
 
     app.dependency_overrides.clear()
 
@@ -1260,16 +1314,22 @@ def test_llm_failures_leave_user_message_persisted_without_assistant_message(tmp
 
     messages = fetch_messages(session_factory)
     assert [message.role for message in messages] == ["user"]
-    assert messages[0].content == "Hello"
+    assert messages[0].content == "Tell me about Tumelo's work"
 
     traces = fetch_chat_traces(session_factory)
     steps = fetch_chat_trace_steps(session_factory)
     assert len(traces) == 1
     assert traces[0].status == TraceStatus.ERROR
-    assert traces[0].error_message == "Unable to generate assistant response. Please try again."
+    assert (
+        traces[0].error_message
+        == "Unable to generate assistant response. Please try again."
+    )
     assert "sk-test-should-not-leak" not in (traces[0].error_message or "")
     assert steps[-1].step_type == TraceStepType.ERROR
-    assert steps[-1].error_message == "Unable to generate assistant response. Please try again."
+    assert (
+        steps[-1].error_message
+        == "Unable to generate assistant response. Please try again."
+    )
 
 
 def test_trace_failures_do_not_break_chat_response(tmp_path) -> None:
@@ -1277,7 +1337,9 @@ def test_trace_failures_do_not_break_chat_response(tmp_path) -> None:
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
     app.dependency_overrides[get_trace_service] = lambda: FailingTraceService()
 
-    response = client.post("/chat", json={"message": "Tell me about tracing."})
+    response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's tracing experience."}
+    )
 
     app.dependency_overrides.clear()
 
@@ -1290,9 +1352,11 @@ def test_trace_failures_do_not_break_chat_response(tmp_path) -> None:
 def test_langfuse_failures_do_not_break_chat_response(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Langfuse should not block this response.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
-    app.dependency_overrides[get_observability_tracer] = lambda: FailingObservabilityTracer()
+    app.dependency_overrides[get_observability_tracer] = lambda: (
+        FailingObservabilityTracer()
+    )
 
-    response = client.post("/chat", json={"message": "Tell me about Langfuse."})
+    response = client.post("/chat", json={"message": "How has Tumelo used Langfuse?"})
 
     app.dependency_overrides.clear()
 
@@ -1352,7 +1416,10 @@ def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
 
     response = client.post(
         "/chat",
-        json={"conversation_id": conversation_id, "message": "new-follow-up"},
+        json={
+            "conversation_id": conversation_id,
+            "message": "Tell me about Tumelo's work",
+        },
     )
 
     app.dependency_overrides.clear()
@@ -1369,31 +1436,48 @@ def test_chat_loads_last_ten_messages_for_follow_up(tmp_path) -> None:
         "message-10",
         "message-11",
         "message-12",
-        "new-follow-up",
+        "Tell me about Tumelo's work",
     ]
 
 
 def test_chat_injects_retrieved_context_into_system_prompt(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Tumelo built a retrieval-grounded chatbot.")
     fake_retrieval = FakeRetrievalService(
-        [build_retrieved_chunk(content="Tumelo built a retrieval-grounded FastAPI chatbot.")]
+        [
+            build_retrieved_chunk(
+                content="Tumelo built a retrieval-grounded FastAPI chatbot."
+            )
+        ]
     )
     client, _, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
 
-    response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot project"})
+    response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's chatbot project"}
+    )
 
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert len(fake_llm.system_prompts) == 1
     assert "Approved Tumelo knowledge base context" in fake_llm.system_prompts[0]
-    assert "Tumelo built a retrieval-grounded FastAPI chatbot." in fake_llm.system_prompts[0]
-    assert "Answer as a professional assistant representing Tumelo." in fake_llm.system_prompts[0]
-    assert "Do not invent experience, projects, employers, dates, tools, certifications, or achievements." in fake_llm.system_prompts[0]
+    assert (
+        "Tumelo built a retrieval-grounded FastAPI chatbot."
+        in fake_llm.system_prompts[0]
+    )
+    assert (
+        "Answer as a professional assistant representing Tumelo."
+        in fake_llm.system_prompts[0]
+    )
+    assert (
+        "Do not invent experience, projects, employers, dates, tools, certifications, or achievements."
+        in fake_llm.system_prompts[0]
+    )
 
 
 def test_chat_uses_retrieval_service_results_for_non_broad_queries(tmp_path) -> None:
-    fake_llm = FakeLLMService(reply="BeautyVerse is Tumelo's beauty services marketplace.")
+    fake_llm = FakeLLMService(
+        reply="BeautyVerse is Tumelo's beauty services marketplace."
+    )
     fake_retrieval = FakeRetrievalService(
         [
             build_retrieved_chunk(
@@ -1406,7 +1490,9 @@ def test_chat_uses_retrieval_service_results_for_non_broad_queries(tmp_path) -> 
             )
         ]
     )
-    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm, fake_retrieval)
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path, fake_llm, fake_retrieval
+    )
     store_knowledge_chunk(
         session_factory,
         source="experience.md",
@@ -1431,9 +1517,14 @@ def test_chat_uses_retrieval_service_results_for_non_broad_queries(tmp_path) -> 
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()["message"] == "BeautyVerse is Tumelo's beauty services marketplace."
+    assert (
+        response.json()["message"]
+        == "BeautyVerse is Tumelo's beauty services marketplace."
+    )
     assert len(fake_llm.calls) == 1
-    assert retrieval_service.calls == [("Tell me about Tumelo's BeautyVerse project", 5)]
+    assert retrieval_service.calls == [
+        ("Tell me about Tumelo's BeautyVerse project", 5)
+    ]
     assert "BeautyVerse - Beauty Services Marketplace" in fake_llm.system_prompts[0]
     assert "Engineering Experience Themes" not in fake_llm.system_prompts[0]
 
@@ -1444,7 +1535,9 @@ def test_chat_uses_retrieval_service_results_for_non_broad_queries(tmp_path) -> 
 
 
 def test_chat_broad_project_query_prefers_multiple_project_chunks(tmp_path) -> None:
-    fake_llm = FakeLLMService(reply="LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects.")
+    fake_llm = FakeLLMService(
+        reply="LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects."
+    )
     fake_retrieval = FakeRetrievalService(
         [
             build_retrieved_chunk(
@@ -1454,7 +1547,9 @@ def test_chat_broad_project_query_prefers_multiple_project_chunks(tmp_path) -> N
             )
         ]
     )
-    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm, fake_retrieval)
+    client, session_factory, retrieval_service = build_test_client(
+        tmp_path, fake_llm, fake_retrieval
+    )
     store_knowledge_chunk(
         session_factory,
         source="projects.md",
@@ -1501,9 +1596,15 @@ def test_chat_broad_project_query_prefers_multiple_project_chunks(tmp_path) -> N
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()["message"] == "LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects."
+    assert (
+        response.json()["message"]
+        == "LetsGo, BeautyVerse, and MedDesk are among Tumelo's projects."
+    )
     assert retrieval_service.calls == []
-    assert "LetsGo South Africa - AI-Powered Tourism Platform" in fake_llm.system_prompts[0]
+    assert (
+        "LetsGo South Africa - AI-Powered Tourism Platform"
+        in fake_llm.system_prompts[0]
+    )
     assert "BeautyVerse - Beauty Services Marketplace" in fake_llm.system_prompts[0]
     assert "MedDesk - AI Clinical Intake Proof of Concept" in fake_llm.system_prompts[0]
     assert "Engineering Experience Themes" not in fake_llm.system_prompts[0]
@@ -1517,19 +1618,99 @@ def test_chat_broad_project_query_prefers_multiple_project_chunks(tmp_path) -> N
     assert logs[0].retrieved_sources == ["projects.md", "projects.md", "projects.md"]
     assert logs[0].used_fallback is False
 
+    messages = fetch_messages(session_factory)
+    routing = messages[1].message_metadata["routing"]
+    assert routing["query_route"] == "portfolio_knowledge"
+    assert routing["retrieval_mode"] == "project_overview"
+    assert routing["retrieval_attempted"] is True
+    assert routing["generation_used"] is True
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_message", "kind"),
+    [
+        (
+            "Hello",
+            "Hi! Ask me anything about Tumelo's background, experience, skills, or projects.",
+            "greeting",
+        ),
+        ("Thank you", "You're welcome.", "acknowledgement"),
+        (
+            "Tell me more.",
+            "Which part of Tumelo's background or which project would you like to know more about?",
+            "clarification",
+        ),
+    ],
+)
+def test_direct_routes_skip_retrieval_and_generation(
+    tmp_path,
+    message: str,
+    expected_message: str,
+    kind: str,
+) -> None:
+    fake_llm = FakeLLMService(reply="This should not be used.")
+    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm)
+
+    response = client.post("/chat", json={"message": message})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["message"] == expected_message
+    assert fake_llm.calls == []
+    assert retrieval_service.calls == []
+    routing = fetch_messages(session_factory)[1].message_metadata["routing"]
+    assert routing["query_route"] == "direct_response"
+    assert routing["direct_response_kind"] == kind
+    assert routing["retrieval_attempted"] is False
+    assert routing["generation_used"] is False
+
+
+def test_resolved_follow_up_retrieves_with_resolved_query(tmp_path) -> None:
+    fake_llm = FakeLLMService(reply="Grounded chatbot answer.")
+    client, session_factory, retrieval_service = build_test_client(tmp_path, fake_llm)
+
+    first = client.post(
+        "/chat",
+        json={"message": "Tell me about Tumelo's production chatbot project"},
+    )
+    second = client.post(
+        "/chat",
+        json={
+            "conversation_id": first.json()["conversation_id"],
+            "message": "What database does it use?",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    assert second.status_code == 200
+    assert len(retrieval_service.calls) == 2
+    resolved_query = retrieval_service.calls[1][0]
+    assert "What database does it use?" in resolved_query
+    assert "production chatbot project" in resolved_query
+    routing = fetch_messages(session_factory)[3].message_metadata["routing"]
+    assert routing["context_resolution_attempted"] is True
+    assert routing["context_resolution_succeeded"] is True
+    assert routing["retrieval_mode"] == "hybrid"
+
 
 def test_chat_personal_query_without_context_returns_safe_fallback(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="This should not be used.")
     fake_retrieval = FakeRetrievalService([])
     client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
 
-    response = client.post("/chat", json={"message": "What companies has Tumelo worked for?"})
+    response = client.post(
+        "/chat", json={"message": "What companies has Tumelo worked for?"}
+    )
 
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert response.json()["message"] == (
-        "I do not have enough approved information about that in Tumelo's knowledge base yet."
+        "I do not have enough approved information to answer that accurately. "
+        "You could ask about Tumelo's listed projects, technical skills, education, "
+        "or work experience."
     )
     assert response.json()["model_config_id"] == "openai:gpt-4.1-mini"
     assert response.json()["estimated_cost_usd"] is None
@@ -1545,24 +1726,28 @@ def test_chat_personal_query_without_context_returns_safe_fallback(tmp_path) -> 
     assert messages[1].estimated_cost_usd is None
 
 
-def test_chat_general_question_without_context_still_uses_llm(tmp_path) -> None:
+def test_chat_general_question_without_context_is_redirected_without_llm(
+    tmp_path,
+) -> None:
     fake_llm = FakeLLMService(reply="RAG combines retrieval with generation.")
     fake_retrieval = FakeRetrievalService([])
     client, session_factory, _ = build_test_client(tmp_path, fake_llm, fake_retrieval)
 
-    response = client.post("/chat", json={"message": "What is retrieval augmented generation?"})
+    response = client.post(
+        "/chat", json={"message": "What is retrieval augmented generation?"}
+    )
 
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()["message"] == "RAG combines retrieval with generation."
-    assert len(fake_llm.calls) == 1
+    assert response.json()["message"] == (
+        "I'm here to answer questions about Tumelo's background and projects. "
+        "You could ask how Tumelo has used retrieval in his work."
+    )
+    assert len(fake_llm.calls) == 0
     assert response.json()["model_config_id"] == "openai:gpt-4.1-mini"
-    assert "No relevant approved Tumelo context was retrieved for this turn" in fake_llm.system_prompts[0]
-
     logs = fetch_retrieval_logs(session_factory)
-    assert len(logs) == 1
-    assert logs[0].used_fallback is False
+    assert logs == []
 
 
 def test_chat_uses_requested_prompt_version(tmp_path) -> None:
@@ -1693,7 +1878,9 @@ def test_submit_feedback_stores_thumbs_up_for_assistant_message(tmp_path) -> Non
     fake_llm = FakeLLMService(reply="Helpful assistant response.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's chatbot work"})
+    chat_response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's chatbot work"}
+    )
     message_id = chat_response.json()["message_id"]
 
     response = client.post(
@@ -1712,11 +1899,16 @@ def test_submit_feedback_stores_thumbs_up_for_assistant_message(tmp_path) -> Non
     feedback_records = fetch_message_feedback(session_factory)
     assert len(feedback_records) == 1
     assert feedback_records[0].message_id == message_id
-    assert feedback_records[0].conversation_id == chat_response.json()["conversation_id"]
+    assert (
+        feedback_records[0].conversation_id == chat_response.json()["conversation_id"]
+    )
     assert feedback_records[0].rating == "up"
     assert feedback_records[0].comment is None
     assert feedback_records[0].trace_id is not None
-    assert feedback_records[0].feedback_metadata["model_config_id"] == "openai:gpt-4.1-mini"
+    assert (
+        feedback_records[0].feedback_metadata["model_config_id"]
+        == "openai:gpt-4.1-mini"
+    )
     assert feedback_records[0].feedback_metadata["prompt_version"] == "v1_professional"
     assert feedback_records[0].feedback_metadata["channel"] == "web_chat"
 
@@ -1739,7 +1931,9 @@ def test_submit_feedback_stores_comment_with_thumbs_down(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Assistant response that needs correction.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's backend work"})
+    chat_response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's backend work"}
+    )
     message_id = chat_response.json()["message_id"]
 
     response = client.post(
@@ -1754,12 +1948,18 @@ def test_submit_feedback_stores_comment_with_thumbs_down(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["rating"] == "down"
-    assert response.json()["comment"] == "The answer did not use the right source document."
+    assert (
+        response.json()["comment"]
+        == "The answer did not use the right source document."
+    )
 
     feedback_records = fetch_message_feedback(session_factory)
     assert len(feedback_records) == 1
     assert feedback_records[0].rating == "down"
-    assert feedback_records[0].comment == "The answer did not use the right source document."
+    assert (
+        feedback_records[0].comment
+        == "The answer did not use the right source document."
+    )
 
 
 def test_submit_feedback_rejects_invalid_rating(tmp_path) -> None:
@@ -1798,7 +1998,9 @@ def test_submit_feedback_rejects_user_message(tmp_path) -> None:
     fake_llm = FakeLLMService(reply="Assistant response.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's work"})
+    chat_response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's work"}
+    )
     user_message_id = fetch_messages(session_factory)[0].id
 
     response = client.post(
@@ -1820,7 +2022,9 @@ def test_submit_feedback_updates_existing_feedback_for_message(tmp_path) -> None
     fake_llm = FakeLLMService(reply="Initial assistant response.")
     client, session_factory, _ = build_test_client(tmp_path, fake_llm)
 
-    chat_response = client.post("/chat", json={"message": "Tell me about Tumelo's AI systems"})
+    chat_response = client.post(
+        "/chat", json={"message": "Tell me about Tumelo's AI systems"}
+    )
     message_id = chat_response.json()["message_id"]
 
     first_response = client.post(
