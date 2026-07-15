@@ -55,7 +55,7 @@ Indexed columns:
 
 ## Current Chat Write Path
 
-`ChatService` records the following steps for normal web and Tavus chat requests:
+`ChatService` records the following steps for normal web chat requests:
 
 1. `request_received`
 2. `retrieval_started`

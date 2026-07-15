@@ -57,10 +57,6 @@ from app.services.tracing import TraceService, TraceServiceError
 
 logger = logging.getLogger(__name__)
 TRACE_PROMPT_PREVIEW_LIMIT = 4000
-OBSERVABILITY_ENDPOINT_BY_CHANNEL = {
-    "tavus_video": "/api/tavus/tools/ask-tumelo",
-    "web_chat": "/chat",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,29 +190,6 @@ class ChatService:
             rate_limit_actor=rate_limit_actor,
             channel="web_chat",
             message_metadata={},
-            allow_external_conversation_id=False,
-        )
-
-    async def generate_answer(
-        self,
-        *,
-        user_message: str,
-        conversation_id: str | None = None,
-        channel: str = "web_chat",
-        metadata: dict[str, object] | None = None,
-        prompt_version: str | None = None,
-        model_config_id: str | None = None,
-        rate_limit_actor: RateLimitActor | None = None,
-    ) -> ChatReply:
-        return await self._generate_reply(
-            message=user_message,
-            conversation_id=conversation_id,
-            prompt_version=prompt_version,
-            model_config_id=model_config_id,
-            rate_limit_actor=rate_limit_actor,
-            channel=channel,
-            message_metadata=dict(metadata or {}),
-            allow_external_conversation_id=channel == "tavus_video",
         )
 
     async def _generate_reply(
@@ -229,7 +202,6 @@ class ChatService:
         rate_limit_actor: RateLimitActor | None,
         channel: str,
         message_metadata: dict[str, object],
-        allow_external_conversation_id: bool,
     ) -> ChatReply:
         normalized_message = message.strip()
         if not normalized_message:
@@ -244,8 +216,6 @@ class ChatService:
             conversation_id,
             prompt_version=selected_prompt_version,
             model_config_id=model_config_id,
-            allow_external_conversation_id=allow_external_conversation_id,
-            external_title=self._extract_title_from_metadata(message_metadata),
         )
         conversation.prompt_version = selected_prompt_version
         selected_model_config = self.llm_service.get_model_config(
@@ -703,24 +673,11 @@ class ChatService:
         *,
         prompt_version: str,
         model_config_id: str | None,
-        allow_external_conversation_id: bool = False,
-        external_title: str | None = None,
     ):
         if conversation_id is None:
             return self._create_conversation(
                 prompt_version=prompt_version,
                 model_config_id=model_config_id,
-                title=external_title,
-            )
-
-        if allow_external_conversation_id and not self._is_valid_conversation_id(
-            conversation_id
-        ):
-            return self._get_or_create_external_conversation(
-                external_conversation_id=conversation_id,
-                prompt_version=prompt_version,
-                model_config_id=model_config_id,
-                title=external_title,
             )
 
         self._validate_conversation_id(conversation_id)
@@ -744,56 +701,17 @@ class ChatService:
         *,
         prompt_version: str,
         model_config_id: str | None,
-        visitor_id: str | None = None,
-        title: str | None = None,
     ):
         selected_model_config = self.llm_service.get_model_config(model_config_id)
         try:
             return self.repository.create_conversation(
-                visitor_id=visitor_id,
-                title=title,
+                visitor_id=None,
+                title=None,
                 model=selected_model_config.config_id,
                 prompt_version=prompt_version,
             )
         except ConversationRepositoryError as exc:
             raise ChatPersistenceError() from exc
-
-    def _get_or_create_external_conversation(
-        self,
-        *,
-        external_conversation_id: str,
-        prompt_version: str,
-        model_config_id: str | None,
-        title: str | None,
-    ):
-        try:
-            conversation = self.repository.get_conversation_by_visitor_id(
-                external_conversation_id
-            )
-        except ConversationRepositoryError as exc:
-            raise ChatPersistenceError() from exc
-
-        if conversation is not None:
-            if title and conversation.title != title:
-                try:
-                    conversation = self.repository.update_conversation(
-                        conversation,
-                        title=title,
-                    )
-                except ConversationRepositoryError as exc:
-                    raise ChatPersistenceError() from exc
-            if model_config_id is not None:
-                conversation.model = self.llm_service.get_model_config(
-                    model_config_id
-                ).config_id
-            return conversation
-
-        return self._create_conversation(
-            prompt_version=prompt_version,
-            model_config_id=model_config_id,
-            visitor_id=external_conversation_id,
-            title=title,
-        )
 
     def _retrieve_chunks(
         self,
@@ -1042,13 +960,6 @@ class ChatService:
         except ValueError:
             return False
         return True
-
-    def _extract_title_from_metadata(self, metadata: dict[str, object]) -> str | None:
-        visitor_name = metadata.get("visitor_name")
-        if not isinstance(visitor_name, str):
-            return None
-        normalized_visitor_name = visitor_name.strip()
-        return normalized_visitor_name or None
 
     def _start_trace(
         self,
@@ -1604,10 +1515,10 @@ class ChatService:
         return normalized or None
 
     def _get_endpoint(self, channel: str) -> str:
-        return OBSERVABILITY_ENDPOINT_BY_CHANNEL.get(channel, "/chat")
+        return "/chat"
 
     def _get_endpoint_name(self, channel: str) -> str:
-        return "ask_tumelo_tool" if channel == "tavus_video" else "chat"
+        return "chat"
 
     def _build_response_cache_context(self) -> ResponseCacheContext:
         return ResponseCacheContext(

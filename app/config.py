@@ -39,12 +39,6 @@ class Settings:
     openai_base_url: str
     openrouter_api_key: str | None
     openrouter_base_url: str
-    tavus_api_key: str | None
-    tavus_base_url: str
-    tavus_face_id: str | None
-    tavus_pal_id: str | None
-    public_backend_url: str | None
-    tavus_tool_secret: str | None
     ingestion_api_secret: str | None
     eval_admin_token: str | None
     default_model_config_id: str
@@ -687,12 +681,6 @@ def get_settings() -> Settings:
         openai_base_url=openai_base_url,
         openrouter_api_key=openrouter_api_key,
         openrouter_base_url=openrouter_base_url,
-        tavus_api_key=os.getenv("TAVUS_API_KEY"),
-        tavus_base_url=os.getenv("TAVUS_BASE_URL", "https://tavusapi.com"),
-        tavus_face_id=os.getenv("TAVUS_FACE_ID"),
-        tavus_pal_id=os.getenv("TAVUS_PAL_ID"),
-        public_backend_url=os.getenv("PUBLIC_BACKEND_URL"),
-        tavus_tool_secret=os.getenv("TAVUS_TOOL_SECRET"),
         ingestion_api_secret=os.getenv("INGESTION_API_SECRET"),
         eval_admin_token=_get_non_empty_env("EVAL_ADMIN_TOKEN"),
         ingestion_backend=_get_choice_env(
