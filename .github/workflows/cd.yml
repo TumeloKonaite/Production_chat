@@ -1,0 +1,66 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy and smoke test production
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    concurrency:
+      group: modal-production
+      cancel-in-progress: false
+
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: production
+      MODAL_HEALTHCHECK_URL: ${{ vars.MODAL_HEALTHCHECK_URL }}
+
+    steps:
+      - name: Checkout CI-validated commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked deployment dependencies
+        run: uv sync --locked --extra deploy
+
+      - name: Deploy Modal application
+        run: uv run modal deploy -m modal_app
+
+      - name: Verify production health
+        run: >-
+          curl --fail --show-error --silent
+          --retry 5
+          --retry-delay 5
+          --retry-all-errors
+          "$MODAL_HEALTHCHECK_URL"

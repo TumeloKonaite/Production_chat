@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend-checks:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    env:
+      # Keep optional external-service integration tests disabled in CI.
+      RUN_DB_INTEGRATION_TESTS: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run linting
+        run: uv run ruff check .
+
+      - name: Run tests
+        run: uv run python -m pytest

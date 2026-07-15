@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 import uuid
 
 from sqlalchemy import CheckConstraint, DateTime, Integer, Numeric, String, Text, func
@@ -12,6 +13,9 @@ from sqlalchemy.sql import sqltypes
 from app.domain.tracing.enums import TRACE_STATUS_VALUES
 from app.repositories.db.base import Base
 from app.repositories.models.common import utcnow
+
+if TYPE_CHECKING:
+    from app.repositories.models.chat_trace_step import ChatTraceStep
 
 TRACE_STATUS_CHECK = "status IN ('started', 'success', 'error', 'cancelled')"
 JSON_VARIANT = sqltypes.JSON().with_variant(JSONB, "postgresql")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 import uuid
 
 from sqlalchemy import DateTime, String, func
@@ -8,6 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.repositories.db.base import Base
 from app.repositories.models.common import utcnow
+
+if TYPE_CHECKING:
+    from app.repositories.models.message import Message
 
 
 class Conversation(Base):

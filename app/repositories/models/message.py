@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 import uuid
 
 from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, func
@@ -8,6 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.repositories.db.base import Base
 from app.repositories.models.common import utcnow
+
+if TYPE_CHECKING:
+    from app.repositories.models.conversation import Conversation
 
 MESSAGE_ROLE_CHECK = "role IN ('user', 'assistant', 'system')"
 

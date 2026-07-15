@@ -23,6 +23,7 @@ def test_get_engine_preserves_sslmode_for_supabase_pooler_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
     monkeypatch.setenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres.project-ref:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require",
@@ -40,6 +41,7 @@ def test_get_engine_uses_direct_url_for_admin_connections(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
     monkeypatch.setenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres.project-ref:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require",

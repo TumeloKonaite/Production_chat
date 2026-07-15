@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 import uuid
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
@@ -11,6 +12,9 @@ from sqlalchemy.sql import sqltypes
 from app.domain.tracing.enums import TRACE_STEP_TYPE_VALUES, TRACE_STATUS_VALUES
 from app.repositories.db.base import Base
 from app.repositories.models.common import utcnow
+
+if TYPE_CHECKING:
+    from app.repositories.models.chat_trace import ChatTrace
 
 JSON_VARIANT = sqltypes.JSON().with_variant(JSONB, "postgresql")
 TRACE_STEP_TYPE_CHECK = (

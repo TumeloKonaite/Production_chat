@@ -1,4 +1,6 @@
-from app.infrastructure.embeddings.errors import EmbeddingConfigurationError
+from app.infrastructure.embeddings.errors import (
+    EmbeddingConfigurationError as EmbeddingConfigurationError,
+)
 
 
 class VectorIndexConfigurationError(Exception):

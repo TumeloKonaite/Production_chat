@@ -105,10 +105,90 @@ modal secret create production-chatbot-api-secrets `
 Deploy the ASGI app and ingestion worker from the same Modal definition:
 
 ```bash
-modal deploy modal_app.py
+modal deploy -m modal_app
 ```
 
 The deployed app name is `production-chatbot-api`. The same deploy publishes the `run_ingestion_job` worker function used by the API trigger.
+
+## GitHub Actions CI/CD
+
+Continuous integration and deployment are separate workflows:
+
+- `.github/workflows/ci.yml` validates every pull request targeting `main` and every
+  push to `main`. It installs the locked Python 3.12 environment, runs the repository's
+  configured Ruff lint checks, and runs the pytest suite. The project does not
+  currently configure a formatter or type checker, so CI does not invent
+  repository-wide checks for either. CI has no Modal credentials, and optional
+  external-database integration tests remain disabled.
+- `.github/workflows/cd.yml` listens for completion of the workflow named `CI`. It
+  deploys only when that CI run succeeded, originated from a push, and validated the
+  `main` branch. CD checks out the exact commit SHA reported by the successful CI run
+  before deploying it.
+
+Pull requests, including pull requests from forks, cannot pass the CD workflow's
+push-only condition or access its production credentials. CD uses the GitHub
+`production` environment, deploys the importable `modal_app` module to the Modal
+`production` environment, and calls the public `/health` endpoint afterward.
+Production deployments are serialized, and an in-progress deployment is never
+cancelled by a newer commit.
+
+### One-time Modal setup
+
+1. Authenticate a trusted local Modal CLI with `modal setup` (or your existing
+   authenticated profile).
+2. Create the isolated Modal environment if it does not already exist:
+
+   ```bash
+   modal environment create production
+   ```
+
+3. In the Modal dashboard, create a service user/token dedicated to GitHub Actions,
+   with only the access needed to deploy into the production environment. Copy the
+   token ID and secret when they are shown. A personal token can instead be created
+   interactively with `modal token new`, but a dedicated CI/CD identity is preferred.
+4. Ensure the `production-chatbot-api-secrets` runtime secret described above exists
+   in the Modal `production` environment. Application runtime secrets stay in Modal;
+   do not duplicate them in GitHub.
+
+### One-time GitHub setup
+
+In the repository's **Settings > Environments**, create an environment named
+`production` and configure it as follows:
+
+- Limit deployment branches to the protected `main` branch.
+- Add environment secrets named `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`.
+- Add an environment variable named `MODAL_HEALTHCHECK_URL` containing the complete
+  public liveness URL, including `/health` (for example,
+  `https://example--production-chatbot-api-fastapi-app.modal.run/health`). Do not put
+  credentials or other secrets in this URL.
+- Optionally add required reviewers when deployment should pause for manual approval
+  after CI succeeds.
+
+The CD workflow sets `MODAL_ENVIRONMENT=production` explicitly; it never relies on a
+developer's default Modal environment. If the production Modal environment uses a
+different name, update both the CD workflow value and this documentation together.
+
+### Operation and troubleshooting
+
+- Open the repository's **Actions** tab and select the failing `CI` or `CD` run to
+  inspect the individual Ruff, pytest, deploy, or health-check step. A failed CI run
+  never starts a production deployment; a failed Modal command or health request
+  marks CD as failed.
+- To redeploy a previous commit, find that commit's original `CI` push run in
+  **Actions** and choose **Re-run all jobs**. A successful rerun emits a new completed
+  CI event, which starts CD for the same validated commit. Confirm that redeploying old
+  application code is safe for the current database schema first.
+- To suspend automatic production deployment temporarily while retaining the CI
+  CI workflow, add a required reviewer to the `production` environment and leave new
+  deployments unapproved. Remove the temporary protection when deployment should
+  resume. You can also disable only the `CD` workflow from its Actions page without
+  affecting pull-request validation.
+- If authentication fails, replace the two GitHub environment secrets with a newly
+  issued Modal CI/CD token. Never print tokens in workflow commands or logs.
+- If the smoke test fails after a successful deploy, verify that
+  `MODAL_HEALTHCHECK_URL` is the current public `/health` URL and inspect the Modal app
+  logs. The `/ready` endpoint is intentionally not used here because it also checks
+  production dependencies and is better suited to deeper operational monitoring.
 
 ## Smoke tests
 
