@@ -233,12 +233,14 @@ def test_llm_service_routes_openrouter_models_to_openrouter_client() -> None:
             *,
             model: str,
             temperature: float | None = None,
+            max_tokens: int | None = None,
         ) -> LLMResponse:
             self.calls.append(
                 {
                     "messages": messages,
                     "model": model,
                     "temperature": temperature,
+                    "max_tokens": max_tokens,
                 }
             )
             return self.response
