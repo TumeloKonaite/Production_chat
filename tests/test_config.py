@@ -450,6 +450,7 @@ def test_get_settings_uses_runtime_database_url_for_migrations_when_direct_url_i
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
     monkeypatch.setenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require",
@@ -650,6 +651,7 @@ def test_get_settings_requires_database_url_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
     monkeypatch.setenv("LLM_API_KEY", "prod-key")
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
@@ -697,6 +699,7 @@ def test_get_settings_requires_llm_api_key_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://frontend.example.com")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postgres:secret@db.example.com:5432/app")
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
