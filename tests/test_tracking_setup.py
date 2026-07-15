@@ -4,8 +4,6 @@ import os
 import sys
 from types import SimpleNamespace
 
-import pytest
-
 from app.config import Settings
 from app.infrastructure.tracking import create_experiment_tracker
 from app.infrastructure.tracking.mlflow_client import MLflowClient
