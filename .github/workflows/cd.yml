@@ -31,7 +31,7 @@ jobs:
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-      MODAL_ENVIRONMENT: production
+      MODAL_ENVIRONMENT: main
       MODAL_HEALTHCHECK_URL: ${{ vars.MODAL_HEALTHCHECK_URL }}
 
     steps:

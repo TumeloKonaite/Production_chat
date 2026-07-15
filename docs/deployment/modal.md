@@ -128,26 +128,28 @@ Continuous integration and deployment are separate workflows:
 Pull requests, including pull requests from forks, cannot pass the CD workflow's
 push-only condition or access its production credentials. CD uses the GitHub
 `production` environment, deploys the importable `modal_app` module to the Modal
-`production` environment, and calls the public `/health` endpoint afterward.
+workspace `tumelokonaite` in its `main` environment, and calls the public `/health`
+endpoint afterward.
 Production deployments are serialized, and an in-progress deployment is never
 cancelled by a newer commit.
 
 ### One-time Modal setup
 
 1. Authenticate a trusted local Modal CLI with `modal setup` (or your existing
-   authenticated profile).
-2. Create the isolated Modal environment if it does not already exist:
+   authenticated profile), then verify that it targets the `tumelokonaite` workspace:
 
    ```bash
-   modal environment create production
+   modal profile current
+   modal token info
+   modal environment list
    ```
 
-3. In the Modal dashboard, create a service user/token dedicated to GitHub Actions,
-   with only the access needed to deploy into the production environment. Copy the
+2. In the `tumelokonaite` Modal workspace, create a service user/token dedicated to
+   GitHub Actions, with only the access needed to deploy into the `main` environment. Copy the
    token ID and secret when they are shown. A personal token can instead be created
    interactively with `modal token new`, but a dedicated CI/CD identity is preferred.
-4. Ensure the `production-chatbot-api-secrets` runtime secret described above exists
-   in the Modal `production` environment. Application runtime secrets stay in Modal;
+3. Ensure the `production-chatbot-api-secrets` runtime secret described above exists
+   in the Modal `main` environment. Application runtime secrets stay in Modal;
    do not duplicate them in GitHub.
 
 ### One-time GitHub setup
@@ -164,9 +166,10 @@ In the repository's **Settings > Environments**, create an environment named
 - Optionally add required reviewers when deployment should pause for manual approval
   after CI succeeds.
 
-The CD workflow sets `MODAL_ENVIRONMENT=production` explicitly; it never relies on a
-developer's default Modal environment. If the production Modal environment uses a
-different name, update both the CD workflow value and this documentation together.
+The GitHub environment and Modal environment intentionally have different names:
+GitHub uses `production` for deployment protection and credentials, while Modal uses
+`main`, where this project's app and runtime secret already live. The CD workflow sets
+`MODAL_ENVIRONMENT=main` explicitly and never relies on a developer's default.
 
 ### Operation and troubleshooting
 
@@ -179,7 +182,7 @@ different name, update both the CD workflow value and this documentation togethe
   CI event, which starts CD for the same validated commit. Confirm that redeploying old
   application code is safe for the current database schema first.
 - To suspend automatic production deployment temporarily while retaining the CI
-  CI workflow, add a required reviewer to the `production` environment and leave new
+  workflow, add a required reviewer to the `production` environment and leave new
   deployments unapproved. Remove the temporary protection when deployment should
   resume. You can also disable only the `CD` workflow from its Actions page without
   affecting pull-request validation.
